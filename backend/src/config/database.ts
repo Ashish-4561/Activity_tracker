@@ -1,0 +1,416 @@
+import { Pool, PoolConfig } from 'pg';
+import sqlite3 from 'sqlite3';
+import { open, Database as SqliteDatabase } from 'sqlite';
+import path from 'path';
+import fs from 'fs';
+import dotenv from 'dotenv';
+
+dotenv.config();
+
+export interface RunResult {
+  changes?: number;
+  lastID?: any;
+  rowCount?: number;
+}
+
+export interface AppDatabase {
+  get<T = any>(sql: string, params?: any[]): Promise<T | undefined>;
+  all<T = any>(sql: string, params?: any[]): Promise<T>;
+  run(sql: string, params?: any[]): Promise<RunResult>;
+  exec(sql: string): Promise<void>;
+  close(): Promise<void>;
+  isPostgres: boolean;
+}
+
+let dbInstance: AppDatabase | null = null;
+let pgPool: Pool | null = null;
+let sqliteDb: SqliteDatabase | null = null;
+
+/**
+ * Transforms SQLite SQL syntax to PostgreSQL SQL syntax:
+ * 1. Converts ? parameter placeholders to $1, $2, $3...
+ * 2. Converts SQLite boolean integer literals (is_active = 1, completed = 0) to PostgreSQL booleans
+ */
+export function formatSqlForPostgres(sql: string): string {
+  let paramIndex = 1;
+  let formatted = sql.replace(/\?/g, () => `$${paramIndex++}`);
+
+  // Normalize SQLite boolean expressions for PostgreSQL
+  formatted = formatted
+    .replace(/\bis_active\s*=\s*1\b/gi, 'is_active = TRUE')
+    .replace(/\bis_active\s*=\s*0\b/gi, 'is_active = FALSE')
+    .replace(/\bcompleted\s*=\s*1\b/gi, 'completed = TRUE')
+    .replace(/\bcompleted\s*=\s*0\b/gi, 'completed = FALSE')
+    .replace(/\bSET\s+is_active\s*=\s*1\b/gi, 'SET is_active = TRUE')
+    .replace(/\bSET\s+is_active\s*=\s*0\b/gi, 'SET is_active = FALSE')
+    .replace(/\bSET\s+completed\s*=\s*1\b/gi, 'SET completed = TRUE')
+    .replace(/\bSET\s+completed\s*=\s*0\b/gi, 'SET completed = FALSE');
+
+  return formatted;
+}
+
+/**
+ * Normalize params array for PostgreSQL (e.g. converting 1/0 to true/false where appropriate)
+ */
+function normalizeParamsForPostgres(params?: any[]): any[] {
+  if (!params || !Array.isArray(params)) return [];
+  return params.map(val => {
+    if (val === undefined) return null;
+    return val;
+  });
+}
+
+class PostgresAppDatabase implements AppDatabase {
+  private pool: Pool;
+  public isPostgres = true;
+
+  constructor(pool: Pool) {
+    this.pool = pool;
+  }
+
+  async get<T = any>(sql: string, params?: any[]): Promise<T | undefined> {
+    const formattedSql = formatSqlForPostgres(sql);
+    const normalizedParams = normalizeParamsForPostgres(params);
+    const result = await this.pool.query(formattedSql, normalizedParams);
+    return (result.rows[0] as T) || undefined;
+  }
+
+  async all<T = any>(sql: string, params?: any[]): Promise<T> {
+    const formattedSql = formatSqlForPostgres(sql);
+    const normalizedParams = normalizeParamsForPostgres(params);
+    const result = await this.pool.query(formattedSql, normalizedParams);
+    return (result.rows as unknown) as T;
+  }
+
+  async run(sql: string, params?: any[]): Promise<RunResult> {
+    const formattedSql = formatSqlForPostgres(sql);
+    const normalizedParams = normalizeParamsForPostgres(params);
+    const result = await this.pool.query(formattedSql, normalizedParams);
+    return {
+      changes: result.rowCount ?? 0,
+      rowCount: result.rowCount ?? 0,
+    };
+  }
+
+  async exec(sql: string): Promise<void> {
+    await this.pool.query(sql);
+  }
+
+  async close(): Promise<void> {
+    await this.pool.end();
+    pgPool = null;
+    dbInstance = null;
+  }
+}
+
+class SqliteAppDatabase implements AppDatabase {
+  private db: SqliteDatabase;
+  public isPostgres = false;
+
+  constructor(db: SqliteDatabase) {
+    this.db = db;
+  }
+
+  async get<T = any>(sql: string, params?: any[]): Promise<T | undefined> {
+    return this.db.get<T>(sql, params || []);
+  }
+
+  async all<T = any>(sql: string, params?: any[]): Promise<T> {
+    return this.db.all<T>(sql, params || []);
+  }
+
+  async run(sql: string, params?: any[]): Promise<RunResult> {
+    const result = await this.db.run(sql, params || []);
+    return {
+      changes: result.changes,
+      lastID: result.lastID,
+    };
+  }
+
+  async exec(sql: string): Promise<void> {
+    await this.db.exec(sql);
+  }
+
+  async close(): Promise<void> {
+    await this.db.close();
+    sqliteDb = null;
+    dbInstance = null;
+  }
+}
+
+async function createPostgresTables(pool: Pool): Promise<void> {
+  await pool.query(`
+    CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT UNIQUE,
+      phone VARCHAR(30) UNIQUE,
+      password_hash TEXT,
+      profile_image TEXT,
+      auth_provider VARCHAR(20) DEFAULT 'email',
+      theme TEXT DEFAULT 'light',
+      ai_enabled BOOLEAN DEFAULT TRUE,
+      ai_suggestions_enabled BOOLEAN DEFAULT TRUE,
+      notifications_enabled BOOLEAN DEFAULT TRUE,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS phone_verifications (
+      id TEXT PRIMARY KEY,
+      phone VARCHAR(30) NOT NULL,
+      otp VARCHAR(10) NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS activities (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      group_name TEXT NOT NULL DEFAULT 'General',
+      icon TEXT,
+      frequency VARCHAR(50) NOT NULL DEFAULT 'daily',
+      start_date DATE NOT NULL DEFAULT CURRENT_DATE,
+      frequency_value INTEGER NOT NULL DEFAULT 1,
+      frequency_unit VARCHAR(20) NOT NULL DEFAULT 'days',
+      duration_value INTEGER NOT NULL DEFAULT 12,
+      duration_unit VARCHAR(20) NOT NULL DEFAULT 'months',
+      is_active BOOLEAN DEFAULT TRUE,
+      color VARCHAR(50),
+      description TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS activity_completions (
+      id TEXT PRIMARY KEY,
+      activity_id TEXT NOT NULL REFERENCES activities(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      group_name TEXT NOT NULL DEFAULT 'General',
+      date DATE NOT NULL,
+      completed BOOLEAN DEFAULT FALSE,
+      completed_at TIMESTAMPTZ,
+      notes TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      CONSTRAINT uq_activity_completion UNIQUE (activity_id, user_id, date)
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role VARCHAR(20) NOT NULL CHECK (role IN ('user', 'assistant')),
+      message TEXT NOT NULL,
+      action_type TEXT,
+      action_data TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS user_settings (
+      id TEXT PRIMARY KEY,
+      user_id TEXT UNIQUE NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      theme VARCHAR(50) DEFAULT 'light',
+      ai_enabled BOOLEAN DEFAULT TRUE,
+      ai_suggestions_enabled BOOLEAN DEFAULT TRUE,
+      notifications_enabled BOOLEAN DEFAULT TRUE,
+      timezone VARCHAR(100) DEFAULT 'UTC',
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_activities_user_id ON activities(user_id);
+    CREATE INDEX IF NOT EXISTS idx_activities_user_active ON activities(user_id, is_active);
+    CREATE INDEX IF NOT EXISTS idx_activity_completions_user_id ON activity_completions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_completions_activity_id ON activity_completions(activity_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_completions_date ON activity_completions(date);
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_user_id ON chat_messages(user_id);
+    CREATE INDEX IF NOT EXISTS idx_phone_verifications_phone ON phone_verifications(phone);
+  `);
+
+  // Run dynamic schema migrations on users table if needed
+  try {
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(30) UNIQUE;`);
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) DEFAULT 'email';`);
+    await pool.query(`ALTER TABLE users ALTER COLUMN email DROP NOT NULL;`);
+    await pool.query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`);
+  } catch (_) {
+    // Ignore migration warnings if already applied
+  }
+}
+
+async function createSqliteTables(db: SqliteDatabase): Promise<void> {
+  await db.exec(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      profile_image TEXT,
+      theme TEXT DEFAULT 'light',
+      ai_enabled INTEGER DEFAULT 1,
+      ai_suggestions_enabled INTEGER DEFAULT 1,
+      notifications_enabled INTEGER DEFAULT 1,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS activities (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      group_name TEXT NOT NULL DEFAULT 'General',
+      icon TEXT,
+      frequency TEXT NOT NULL DEFAULT 'daily',
+      start_date TEXT NOT NULL DEFAULT (date('now')),
+      frequency_value INTEGER NOT NULL DEFAULT 1,
+      frequency_unit TEXT NOT NULL DEFAULT 'days',
+      duration_value INTEGER NOT NULL DEFAULT 12,
+      duration_unit TEXT NOT NULL DEFAULT 'months',
+      is_active INTEGER DEFAULT 1,
+      color TEXT,
+      description TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS activity_completions (
+      id TEXT PRIMARY KEY,
+      activity_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      group_name TEXT NOT NULL DEFAULT 'General',
+      date TEXT NOT NULL,
+      completed INTEGER DEFAULT 0,
+      completed_at DATETIME,
+      notes TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (activity_id) REFERENCES activities(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(activity_id, user_id, date)
+    );
+
+    CREATE TABLE IF NOT EXISTS chat_messages (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      message TEXT NOT NULL,
+      action_type TEXT,
+      action_data TEXT,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE TABLE IF NOT EXISTS user_settings (
+      id TEXT PRIMARY KEY,
+      user_id TEXT UNIQUE NOT NULL,
+      theme TEXT DEFAULT 'light',
+      ai_enabled INTEGER DEFAULT 1,
+      ai_suggestions_enabled INTEGER DEFAULT 1,
+      notifications_enabled INTEGER DEFAULT 1,
+      timezone TEXT DEFAULT 'UTC',
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_activities_user_id ON activities(user_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_completions_user_id ON activity_completions(user_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_completions_activity_id ON activity_completions(activity_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_completions_date ON activity_completions(date);
+    CREATE INDEX IF NOT EXISTS idx_chat_messages_user_id ON chat_messages(user_id);
+  `);
+}
+
+export function parseDatabaseUrl(databaseUrl: string): PoolConfig {
+  try {
+    const parsed = new URL(databaseUrl);
+    return {
+      user: decodeURIComponent(parsed.username),
+      password: decodeURIComponent(parsed.password),
+      host: parsed.hostname,
+      port: parsed.port ? parseInt(parsed.port, 10) : 5432,
+      database: parsed.pathname ? parsed.pathname.replace(/^\//, '') : 'postgres',
+      ssl: {
+        rejectUnauthorized: false,
+      },
+    };
+  } catch {
+    return {
+      connectionString: databaseUrl,
+      ssl: {
+        rejectUnauthorized: false,
+      },
+    };
+  }
+}
+
+export async function initializeDatabase(): Promise<AppDatabase> {
+  if (dbInstance) {
+    return dbInstance;
+  }
+
+  const databaseUrl = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
+
+  if (databaseUrl) {
+    try {
+      console.log('🔗 Connecting to Supabase PostgreSQL...');
+      const config = parseDatabaseUrl(databaseUrl);
+
+      pgPool = new Pool(config);
+
+      // Test connection
+      const client = await pgPool.connect();
+      try {
+        console.log('✓ Connected to Supabase PostgreSQL successfully');
+        await createPostgresTables(pgPool);
+        console.log('✓ PostgreSQL schema and tables verified');
+      } finally {
+        client.release();
+      }
+
+      dbInstance = new PostgresAppDatabase(pgPool);
+      return dbInstance;
+    } catch (pgError: any) {
+      console.warn(`⚠ Supabase connection failed (${pgError.message || pgError}).`);
+      console.log('ℹ Falling back to local SQLite database (./data/activity_tracker.db)...');
+      if (pgPool) {
+        try { await pgPool.end(); } catch (_) {}
+        pgPool = null;
+      }
+    }
+  }
+
+  // Fallback to SQLite if DATABASE_URL is not set
+  console.log('ℹ DATABASE_URL not found, using local SQLite fallback (./data/activity_tracker.db)');
+  const dbPath = process.env.DATABASE_PATH || './data/activity_tracker.db';
+  const dbDir = path.dirname(dbPath);
+
+  if (!fs.existsSync(dbDir)) {
+    fs.mkdirSync(dbDir, { recursive: true });
+  }
+
+  sqliteDb = await open({
+    filename: dbPath,
+    driver: sqlite3.Database,
+  });
+
+  await sqliteDb.exec('PRAGMA foreign_keys = ON');
+  await createSqliteTables(sqliteDb);
+
+  dbInstance = new SqliteAppDatabase(sqliteDb);
+  return dbInstance;
+}
+
+export async function getDatabase(): Promise<AppDatabase> {
+  if (!dbInstance) {
+    return initializeDatabase();
+  }
+  return dbInstance;
+}
+
+export async function closeDatabase(): Promise<void> {
+  if (dbInstance) {
+    await dbInstance.close();
+    dbInstance = null;
+  }
+}

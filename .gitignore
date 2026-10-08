@@ -1,0 +1,38 @@
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+*.sublime-project
+*.sublime-workspace
+
+# Environment
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build outputs
+dist/
+build/
+node_modules/
+.dart_tool/
+.gradle/
+*.apk
+activity_tracker.apk
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+data/
+
+# Misc
+.cache/
+.parcel-cache
+*.log
+npm-debug.log*

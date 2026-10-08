@@ -1,0 +1,70 @@
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+.pub-cache/
+.pub/
+build/
+
+# Xcode
+ios/.symlinks/
+ios/Flutter/Flutter.framework
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+ios/Flutter/app.flx
+ios/Flutter/app.zip
+ios/Flutter/flutter_assets/
+ios/Flutter/flutter_export_environment.sh
+ios/ServiceDefinitions.json
+ios/Runner.xcodeproj/project.pbxproj
+
+# Android
+android/app/debug
+android/app/profile
+android/app/release
+android/.gradle
+android/captures/
+android/gradle-wrapper.jar
+android/gradlew
+android/gradlew.bat
+android/local.properties
+
+# Environment
+.env
+.env.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Misc
+*.iml
+*.class
+.gradle
+.classpath
+.c9/
+*.swp
+*~.nib
+local.properties
+.settings/
+*.jar
+*.class
+.buildlog/
+
+# Dart/Flutter/Pub/Plugins
+pubspec.lock
+.dart_tool/
+.packages
+
+# Generated files
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+# Widget Preview related
+.widget_preview/

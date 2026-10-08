@@ -1,0 +1,924 @@
+import 'dart:async';
+import 'dart:convert';
+import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'api_service.dart';
+import 'auth_service.dart';
+
+class Activity {
+  final String id;
+  final String userId;
+  final String name;
+  final String? icon;
+  final String frequency;
+  final String startDate;
+  final int frequencyValue;
+  final String frequencyUnit;
+  final int durationValue;
+  final String durationUnit;
+  String groupName;
+  final bool isActive;
+  final String? color;
+  final String? description;
+  final String createdAt;
+  final String updatedAt;
+  bool isCompleted;
+
+  Activity({
+    required this.id,
+    required this.userId,
+    required this.name,
+    this.icon,
+    required this.frequency,
+    required this.startDate,
+    required this.frequencyValue,
+    required this.frequencyUnit,
+    required this.durationValue,
+    required this.durationUnit,
+    required this.groupName,
+    required this.isActive,
+    this.color,
+    this.description,
+    required this.createdAt,
+    required this.updatedAt,
+    this.isCompleted = false,
+  });
+
+  factory Activity.fromJson(Map<String, dynamic> json) {
+    bool parseBool(dynamic value, bool defaultValue) {
+      if (value == null) return defaultValue;
+      if (value is bool) return value;
+      if (value is num) return value != 0;
+      if (value is String) return value.toLowerCase() == 'true' || value == '1';
+      return defaultValue;
+    }
+
+    return Activity(
+      id: json['id']?.toString() ?? '',
+      userId: json['user_id']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
+      icon: json['icon']?.toString(),
+      frequency: json['frequency']?.toString() ?? 'daily',
+      startDate: json['start_date']?.toString() ?? DateTime.now().toIso8601String().split('T').first,
+      frequencyValue: json['frequency_value'] is int ? json['frequency_value'] : int.tryParse(json['frequency_value']?.toString() ?? '1') ?? 1,
+      frequencyUnit: json['frequency_unit']?.toString() ?? ((json['frequency'] ?? 'daily') == 'weekly' ? 'weeks' : 'days'),
+      durationValue: json['duration_value'] is int ? json['duration_value'] : int.tryParse(json['duration_value']?.toString() ?? '12') ?? 12,
+      durationUnit: json['duration_unit']?.toString() ?? 'months',
+      groupName: json['group_name']?.toString() ?? 'General',
+      isActive: parseBool(json['is_active'], true),
+      color: json['color']?.toString(),
+      description: json['description']?.toString(),
+      createdAt: json['created_at']?.toString() ?? '',
+      updatedAt: json['updated_at']?.toString() ?? '',
+      isCompleted: parseBool(json['completed'], false),
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'user_id': userId,
+      'name': name,
+      'icon': icon,
+      'frequency': frequency,
+      'start_date': startDate,
+      'frequency_value': frequencyValue,
+      'frequency_unit': frequencyUnit,
+      'duration_value': durationValue,
+      'duration_unit': durationUnit,
+      'group_name': groupName,
+      'is_active': isActive,
+      'color': color,
+      'description': description,
+      'created_at': createdAt,
+      'updated_at': updatedAt,
+      'completed': isCompleted,
+    };
+  }
+}
+
+class DailyProgress {
+  final String date;
+  final int completed;
+  final int total;
+  final int percentage;
+
+  DailyProgress({
+    required this.date,
+    required this.completed,
+    required this.total,
+    required this.percentage,
+  });
+
+  factory DailyProgress.fromJson(Map<String, dynamic> json) {
+    return DailyProgress(
+      date: json['date']?.toString() ?? '',
+      completed: json['completed'] is int ? json['completed'] : int.tryParse(json['completed']?.toString() ?? '0') ?? 0,
+      total: json['total'] is int ? json['total'] : int.tryParse(json['total']?.toString() ?? '0') ?? 0,
+      percentage: json['percentage'] is int ? json['percentage'] : int.tryParse(json['percentage']?.toString() ?? '0') ?? 0,
+    );
+  }
+}
+
+class ActivityService extends ChangeNotifier {
+  final ApiService apiService;
+  final AuthService authService;
+  final bool previewMode;
+
+  List<Activity> _activities = [];
+  DailyProgress? _dailyProgress;
+  bool _isLoading = false;
+  String? _error;
+
+  /// Per-activity progress percentage (0–100)
+  Map<String, int> _activityProgress = {};
+
+  /// Per-group progress percentage (0–100) derived from individual activities.
+  Map<String, int> _groupProgress = {};
+
+  /// Per-activity streaks
+  Map<String, int> _activityStreaks = {};
+  Map<String, int> _activityBestStreaks = {};
+
+  /// Per-group streaks & weekly progress
+  final Map<String, int> _groupStreaks = {};
+  final Map<String, int> _groupBestStreaks = {};
+  final Map<String, int> _groupWeeklyProgress = {};
+
+  static const String _kGuestActivitiesKey = 'guest_local_activities_v1';
+  static const String _kGuestCompletionsKey = 'guest_local_completions_v2';
+  static const String _kGuestInitializedKey = 'guest_local_initialized_v1';
+
+  Map<String, bool> _guestCompletions = {};
+  String _currentDate = DateTime.now().toIso8601String().split('T').first;
+  Timer? _dayCheckTimer;
+
+  int _overallCurrentStreak = 0;
+  int _overallBestStreak = 0;
+  int _overallWeeklyProgress = 0;
+
+  ActivityService(this.apiService, this.authService, {this.previewMode = false}) {
+    _currentDate = _todayDateString();
+    authService.addListener(_onAuthChanged);
+    if (authService.isLoggedIn) {
+      fetchActivities();
+      fetchDailyProgress();
+    } else {
+      _loadGuestActivitiesFromStorage();
+    }
+    // Check every 30 seconds if calendar day rolled over
+    _dayCheckTimer = Timer.periodic(const Duration(seconds: 30), (_) {
+      checkDayRollover();
+    });
+  }
+
+  @override
+  void dispose() {
+    _dayCheckTimer?.cancel();
+    authService.removeListener(_onAuthChanged);
+    super.dispose();
+  }
+
+  String _todayDateString() => DateTime.now().toIso8601String().split('T').first;
+
+  String get currentDate => _currentDate;
+
+  /// Checks if calendar date has changed and automatically resets tasks for the new day.
+  bool checkDayRollover() {
+    final today = _todayDateString();
+    if (_currentDate != today) {
+      _currentDate = today;
+      refreshForNewDay();
+      return true;
+    }
+    return false;
+  }
+
+  Future<void> refreshForNewDay() async {
+    if (isGuest || previewMode) {
+      _syncGuestActivitiesForDate(_currentDate);
+      _rebuildPreviewProgress();
+      notifyListeners();
+    } else {
+      await fetchActivities(date: _currentDate);
+      await fetchDailyProgress(date: _currentDate);
+    }
+  }
+
+  void _syncGuestActivitiesForDate(String date) {
+    for (final act in _activities) {
+      act.isCompleted = _guestCompletions['${act.id}:$date'] == true;
+    }
+  }
+
+  Map<String, Set<String>> getGuestCompletionHistory() {
+    final map = <String, Set<String>>{};
+    for (final act in _activities) {
+      map[act.id] = {};
+    }
+    for (final entry in _guestCompletions.entries) {
+      if (entry.value == true) {
+        final parts = entry.key.split(':');
+        if (parts.length >= 2) {
+          final actId = parts[0];
+          final date = parts[1];
+          map.putIfAbsent(actId, () => {}).add(date);
+        }
+      }
+    }
+    return map;
+  }
+
+  bool get isGuest => !authService.isLoggedIn;
+  bool get hasGuestActivities => isGuest && _activities.isNotEmpty;
+
+  void _onAuthChanged() {
+    if (authService.isLoggedIn) {
+      fetchActivities();
+      fetchDailyProgress();
+    } else {
+      clearData();
+      _loadGuestActivitiesFromStorage();
+    }
+  }
+
+  Future<void> migrateGuestDataToCloud() async {
+    if (!authService.isLoggedIn) return;
+    _isLoading = true;
+    notifyListeners();
+
+    try {
+      final guestActivitiesToMigrate = List<Activity>.from(_activities);
+      for (final act in guestActivitiesToMigrate) {
+        final res = await apiService.createActivity(
+          name: act.name,
+          frequency: act.frequency,
+          groupName: act.groupName,
+          icon: act.icon,
+          startDate: act.startDate,
+          frequencyValue: act.frequencyValue,
+          frequencyUnit: act.frequencyUnit,
+          durationValue: act.durationValue,
+          durationUnit: act.durationUnit,
+          color: act.color,
+          description: act.description,
+        );
+        final createdId = res['activity']?['id']?.toString();
+        if (act.isCompleted && createdId != null) {
+          await apiService.completeActivity(activityId: createdId);
+        }
+      }
+      await fetchActivities();
+      await fetchDailyProgress();
+    } catch (e) {
+      _error = e.toString();
+    } finally {
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  void clearData() {
+    _activities = [];
+    _dailyProgress = null;
+    _activityProgress.clear();
+    _groupProgress.clear();
+    _activityStreaks.clear();
+    _activityBestStreaks.clear();
+    _groupStreaks.clear();
+    _groupBestStreaks.clear();
+    _groupWeeklyProgress.clear();
+    _overallCurrentStreak = 0;
+    _overallBestStreak = 0;
+    _overallWeeklyProgress = 0;
+    notifyListeners();
+  }
+
+  List<Activity> get activities => _activities;
+  DailyProgress? get dailyProgress => _dailyProgress;
+  bool get isLoading => _isLoading;
+  String? get error => _error;
+
+  int activityProgress(String activityId) => _activityProgress[activityId] ?? 0;
+  int groupProgress(String groupName) => _groupProgress[groupName] ?? 0;
+
+  int activityStreak(String activityId) {
+    if (_activityStreaks.containsKey(activityId)) {
+      return _activityStreaks[activityId]!;
+    }
+    final act = _activities.firstWhere((a) => a.id == activityId, orElse: () => Activity(
+      id: '', userId: '', name: '', frequency: '', startDate: '', frequencyValue: 1, frequencyUnit: '', durationValue: 1, durationUnit: '', groupName: '', isActive: true, createdAt: '', updatedAt: '',
+    ));
+    return act.isCompleted ? 1 : 0;
+  }
+
+  int activityBestStreak(String activityId) => _activityBestStreaks[activityId] ?? activityStreak(activityId);
+
+  int groupStreak(String groupName) {
+    if (_groupStreaks.containsKey(groupName)) {
+      return _groupStreaks[groupName]!;
+    }
+    final groupActs = _activities.where((a) => a.groupName == groupName).toList();
+    if (groupActs.isEmpty) return 0;
+    final allCompleted = groupActs.every((a) => a.isCompleted);
+    return allCompleted ? 1 : 0;
+  }
+
+  int groupBestStreak(String groupName) => _groupBestStreaks[groupName] ?? groupStreak(groupName);
+
+  int groupWeeklyProgress(String groupName) {
+    if (_groupWeeklyProgress.containsKey(groupName)) {
+      return _groupWeeklyProgress[groupName]!;
+    }
+    return groupProgress(groupName);
+  }
+
+  int get overallCurrentStreak => _overallCurrentStreak;
+  int get overallBestStreak => _overallBestStreak;
+  int get overallWeeklyProgress => _overallWeeklyProgress;
+
+  Future<void> fetchActivities({String? date}) async {
+    if (previewMode) return;
+    if (isGuest) {
+      await _loadGuestActivitiesFromStorage();
+      return;
+    }
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final targetDate = date ?? _todayDateString();
+      _currentDate = targetDate;
+      final response = await apiService.getActivities(date: targetDate);
+      final completionsRes = await apiService.getCompletionsByDate(date: targetDate).catchError((_) => <String, dynamic>{});
+      final completedMap = <String, bool>{};
+      final completionsList = completionsRes['completions'] as List? ?? [];
+      for (final c in completionsList) {
+        if (c is Map && c['activity_id'] != null) {
+          final isComp = c['completed'] == true || c['completed'] == 1;
+          completedMap[c['activity_id'].toString()] = isComp;
+        }
+      }
+
+      _activities = (response['activities'] as List?)
+              ?.map((json) {
+                final act = Activity.fromJson(json);
+                if (completedMap.containsKey(act.id)) {
+                  act.isCompleted = completedMap[act.id] ?? false;
+                }
+                return act;
+              })
+              .toList() ??
+          [];
+      _isLoading = false;
+      notifyListeners();
+      await fetchActivityProgress();
+      await fetchDailyProgress(date: targetDate);
+    } catch (e) {
+      // If network fails (e.g. mobile cannot reach localhost:5000), fall back to local storage
+      await _loadGuestActivitiesFromStorage();
+      _isLoading = false;
+      notifyListeners();
+    }
+  }
+
+  Future<void> fetchDailyProgress({String? date}) async {
+    if (previewMode) {
+      _updatePreviewProgress();
+      return;
+    }
+    try {
+      final response = await apiService.getDailyProgress(date: date);
+      _dailyProgress = DailyProgress.fromJson(response);
+      notifyListeners();
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+    }
+  }
+
+  /// Fetches history-based progress for rolling 30 days and calculates streaks.
+  Future<void> fetchActivityProgress() async {
+    if (previewMode) {
+      _rebuildPreviewProgress();
+      return;
+    }
+    try {
+      final to = DateTime.now();
+      final from = to.subtract(const Duration(days: 29));
+      final fromStr = from.toIso8601String().split('T').first;
+      final toStr = to.toIso8601String().split('T').first;
+
+      final response = await apiService.getRangeProgress(from: fromStr, to: toStr);
+
+      final activityList = response['activities'] as List? ?? [];
+      final newActivityProgress = <String, int>{};
+      final newActivityStreaks = <String, int>{};
+      final newActivityBestStreaks = <String, int>{};
+
+      for (final item in activityList) {
+        final id = item['id'] as String? ?? '';
+        final pct = item['percentage'] as int? ?? 0;
+        if (id.isNotEmpty) {
+          newActivityProgress[id] = pct;
+          final history = (item['history'] as List? ?? []).map((e) => e == true).toList();
+          int current = 0;
+          for (int i = history.length - 1; i >= 0; i--) {
+            if (history[i]) {
+              current++;
+            } else {
+              break;
+            }
+          }
+          int best = 0;
+          int streak = 0;
+          for (final completed in history) {
+            if (completed) {
+              streak++;
+              if (streak > best) best = streak;
+            } else {
+              streak = 0;
+            }
+          }
+          newActivityStreaks[id] = current;
+          newActivityBestStreaks[id] = best;
+        }
+      }
+
+      _activityProgress = newActivityProgress;
+      _activityStreaks = newActivityStreaks;
+      _activityBestStreaks = newActivityBestStreaks;
+
+      _overallCurrentStreak = response['current_streak'] as int? ?? 0;
+      _overallBestStreak = response['best_streak'] as int? ?? 0;
+      _overallWeeklyProgress = response['average_daily_percentage'] as int? ?? 0;
+
+      _rebuildGroupProgress();
+
+      final dailyList = response['daily_progress'] as List? ?? [];
+      if (dailyList.length >= 7) {
+        final last7 = dailyList.sublist(dailyList.length - 7);
+        final completed7 = last7.fold<int>(0, (acc, item) => acc + (item['completed'] as int? ?? 0));
+        final total7 = last7.fold<int>(0, (acc, item) => acc + (item['total'] as int? ?? 0));
+        if (total7 > 0) {
+          _overallWeeklyProgress = ((completed7 / total7) * 100).round();
+        }
+      }
+
+      notifyListeners();
+    } catch (_) {
+      _rebuildPreviewProgress();
+    }
+  }
+
+  void _rebuildGroupProgress() {
+    final groupTotals = <String, List<int>>{};
+    for (final activity in _activities) {
+      groupTotals.putIfAbsent(activity.groupName, () => []);
+      // If completed today, treat today as contributing 100% or stored progress
+      final pct = activity.isCompleted ? 100 : (_activityProgress[activity.id] ?? 0);
+      groupTotals[activity.groupName]!.add(pct);
+    }
+    _groupProgress = groupTotals.map((name, percentages) {
+      if (percentages.isEmpty) return MapEntry(name, 0);
+      final avg = percentages.reduce((a, b) => a + b) ~/ percentages.length;
+      return MapEntry(name, avg);
+    });
+
+    // Derive group streaks
+    for (final groupName in groupTotals.keys) {
+      final acts = _activities.where((a) => a.groupName == groupName).toList();
+      if (acts.isEmpty) continue;
+      final completedToday = acts.where((a) => a.isCompleted).length;
+      final total = acts.length;
+      final todayAll = completedToday == total;
+
+      int maxActStreak = 0;
+      int maxActBest = 0;
+      for (final a in acts) {
+        final s = activityStreak(a.id);
+        if (s > maxActStreak) maxActStreak = s;
+        final b = activityBestStreak(a.id);
+        if (b > maxActBest) maxActBest = b;
+      }
+
+      _groupStreaks[groupName] = todayAll ? (maxActStreak > 0 ? maxActStreak : 1) : 0;
+      _groupBestStreaks[groupName] = maxActBest > 0 ? maxActBest : (todayAll ? 1 : 0);
+      _groupWeeklyProgress[groupName] = _groupProgress[groupName] ?? 0;
+    }
+  }
+
+  void _rebuildPreviewProgress() {
+    final today = _currentDate;
+    DateTime todayDt;
+    try {
+      todayDt = DateTime.parse(today);
+    } catch (_) {
+      todayDt = DateTime.now();
+    }
+
+    final newActivityProgress = <String, int>{};
+    for (final activity in _activities) {
+      final isDoneToday = _guestCompletions['${activity.id}:$today'] == true;
+      activity.isCompleted = isDoneToday;
+      newActivityProgress[activity.id] = isDoneToday ? 100 : 0;
+
+      // Calculate streak backwards from today
+      int streak = isDoneToday ? 1 : 0;
+      for (int i = 1; i <= 365; i++) {
+        final pastDate = todayDt.subtract(Duration(days: i)).toIso8601String().split('T').first;
+        if (_guestCompletions['${activity.id}:$pastDate'] == true) {
+          streak++;
+        } else {
+          break;
+        }
+      }
+      _activityStreaks[activity.id] = streak;
+      _activityBestStreaks[activity.id] = (_activityBestStreaks[activity.id] ?? 0) < streak
+          ? streak
+          : (_activityBestStreaks[activity.id] ?? streak);
+    }
+    _activityProgress = newActivityProgress;
+    _rebuildGroupProgress();
+  }
+
+  Future<void> _loadGuestActivitiesFromStorage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final hasInit = prefs.getBool(_kGuestInitializedKey) ?? false;
+      if (!hasInit) {
+        _activities = [];
+        _guestCompletions = {};
+        await prefs.setBool(_kGuestInitializedKey, true);
+        await prefs.setString(_kGuestActivitiesKey, jsonEncode([]));
+        await prefs.setString(_kGuestCompletionsKey, jsonEncode({}));
+      } else {
+        final raw = prefs.getString(_kGuestActivitiesKey);
+        if (raw != null && raw.isNotEmpty) {
+          final List<dynamic> list = jsonDecode(raw);
+          _activities = list
+              .map((item) => Activity.fromJson(Map<String, dynamic>.from(item as Map)))
+              .toList();
+        } else {
+          _activities = [];
+        }
+
+        final rawComp = prefs.getString(_kGuestCompletionsKey);
+        if (rawComp != null && rawComp.isNotEmpty) {
+          final Map<String, dynamic> compMap = jsonDecode(rawComp);
+          _guestCompletions = compMap.map((k, v) => MapEntry(k, v == true));
+        } else {
+          _guestCompletions = {};
+        }
+
+        // Apply completion status for TODAY's date.
+        // If today is a new day and there is no completion record for today,
+        // act.isCompleted resets to FALSE!
+        _currentDate = _todayDateString();
+        _syncGuestActivitiesForDate(_currentDate);
+      }
+    } catch (_) {
+      _activities = [];
+      _guestCompletions = {};
+    }
+    _rebuildPreviewProgress();
+    _updatePreviewProgress();
+    notifyListeners();
+  }
+
+  Future<void> _saveGuestActivitiesToStorage() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = jsonEncode(_activities.map((a) => a.toJson()).toList());
+      await prefs.setString(_kGuestActivitiesKey, raw);
+      await prefs.setString(_kGuestCompletionsKey, jsonEncode(_guestCompletions));
+      await prefs.setBool(_kGuestInitializedKey, true);
+    } catch (_) {}
+  }
+
+  Future<void> clearGuestData() async {
+    _activities = [];
+    _guestCompletions.clear();
+    clearData();
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kGuestActivitiesKey, jsonEncode([]));
+      await prefs.setString(_kGuestCompletionsKey, jsonEncode({}));
+      await prefs.setBool(_kGuestInitializedKey, true);
+    } catch (_) {}
+    notifyListeners();
+  }
+
+  Future<void> addActivity({
+    required String name,
+    required String frequency,
+    String? groupName,
+    String? icon,
+    int frequencyValue = 1,
+    String frequencyUnit = 'days',
+    int durationValue = 12,
+    String durationUnit = 'months',
+    String? startDate,
+    String? color,
+    String? description,
+  }) async {
+    final targetGroup = (groupName == null || groupName.trim().isEmpty) ? 'General' : groupName.trim();
+    if (isGuest || previewMode) {
+      final now = DateTime.now().toIso8601String();
+      _activities.add(Activity(
+        id: 'preview-${DateTime.now().microsecondsSinceEpoch}',
+        userId: 'preview-user',
+        name: name,
+        frequency: frequency,
+        startDate: startDate ?? DateTime.now().toIso8601String().split('T').first,
+        frequencyValue: frequencyValue,
+        frequencyUnit: frequencyUnit,
+        durationValue: durationValue,
+        durationUnit: durationUnit,
+        groupName: targetGroup,
+        icon: icon,
+        color: color,
+        description: description,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+      ));
+      _updatePreviewProgress();
+      _rebuildPreviewProgress();
+      await _saveGuestActivitiesToStorage();
+      notifyListeners();
+      return;
+    }
+    try {
+      await apiService.createActivity(
+        name: name,
+        frequency: frequency,
+        groupName: targetGroup,
+        icon: icon,
+        frequencyValue: frequencyValue,
+        frequencyUnit: frequencyUnit,
+        durationValue: durationValue,
+        durationUnit: durationUnit,
+        startDate: startDate,
+        color: color,
+        description: description,
+      );
+      await fetchActivities();
+      await fetchDailyProgress();
+    } catch (e) {
+      // Fallback: save locally so the user can continue using the app
+      final now = DateTime.now().toIso8601String();
+      _activities.add(Activity(
+        id: 'local-${DateTime.now().microsecondsSinceEpoch}',
+        userId: authService.currentUser?.id ?? 'local-user',
+        name: name,
+        frequency: frequency,
+        startDate: startDate ?? DateTime.now().toIso8601String().split('T').first,
+        frequencyValue: frequencyValue,
+        frequencyUnit: frequencyUnit,
+        durationValue: durationValue,
+        durationUnit: durationUnit,
+        groupName: targetGroup,
+        icon: icon,
+        color: color,
+        description: description,
+        isActive: true,
+        createdAt: now,
+        updatedAt: now,
+      ));
+      _updatePreviewProgress();
+      _rebuildPreviewProgress();
+      await _saveGuestActivitiesToStorage();
+      notifyListeners();
+    }
+  }
+
+  Future<void> updateActivity({
+    required String id,
+    String? name,
+    String? frequency,
+    String? groupName,
+    String? icon,
+    String? color,
+    int? frequencyValue,
+    String? frequencyUnit,
+    int? durationValue,
+    String? durationUnit,
+    String? startDate,
+  }) async {
+    if (isGuest || previewMode) {
+      final index = _activities.indexWhere((a) => a.id == id);
+      if (index != -1) {
+        final current = _activities[index];
+        _activities[index] = Activity(
+          id: current.id,
+          userId: current.userId,
+          name: name ?? current.name,
+          frequency: frequency ?? current.frequency,
+          groupName: groupName ?? current.groupName,
+          icon: icon ?? current.icon,
+          color: color ?? current.color,
+          frequencyValue: frequencyValue ?? current.frequencyValue,
+          frequencyUnit: frequencyUnit ?? current.frequencyUnit,
+          durationValue: durationValue ?? current.durationValue,
+          durationUnit: durationUnit ?? current.durationUnit,
+          startDate: startDate ?? current.startDate,
+          isActive: current.isActive,
+          description: current.description,
+          createdAt: current.createdAt,
+          updatedAt: DateTime.now().toIso8601String(),
+          isCompleted: current.isCompleted,
+        );
+        _rebuildPreviewProgress();
+        await _saveGuestActivitiesToStorage();
+        notifyListeners();
+      }
+      return;
+    }
+    try {
+      await apiService.updateActivity(
+        id: id,
+        name: name,
+        frequency: frequency,
+        groupName: groupName,
+        icon: icon,
+        color: color,
+        frequencyValue: frequencyValue,
+        frequencyUnit: frequencyUnit,
+        durationValue: durationValue,
+        durationUnit: durationUnit,
+        startDate: startDate,
+      );
+      await fetchActivities();
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  Future<void> deleteActivity(String id) async {
+    if (isGuest || previewMode) {
+      _activities.removeWhere((activity) => activity.id == id);
+      _activityProgress.remove(id);
+      _activityStreaks.remove(id);
+      _activityBestStreaks.remove(id);
+      _updatePreviewProgress();
+      _rebuildPreviewProgress();
+      await _saveGuestActivitiesToStorage();
+      notifyListeners();
+      return;
+    }
+    try {
+      await apiService.deleteActivity(id);
+      _activityProgress.remove(id);
+      _activityStreaks.remove(id);
+      _activityBestStreaks.remove(id);
+      await fetchActivities();
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  Future<void> deleteGroup(String groupName) async {
+    if (isGuest || previewMode) {
+      final removedIds = _activities
+          .where((a) => a.groupName == groupName)
+          .map((a) => a.id)
+          .toList();
+      _activities.removeWhere((activity) => activity.groupName == groupName);
+      for (final id in removedIds) {
+        _activityProgress.remove(id);
+        _activityStreaks.remove(id);
+        _activityBestStreaks.remove(id);
+      }
+      _updatePreviewProgress();
+      _rebuildPreviewProgress();
+      await _saveGuestActivitiesToStorage();
+      notifyListeners();
+      return;
+    }
+    try {
+      await apiService.deleteGroup(groupName);
+      final removedIds = _activities
+          .where((a) => a.groupName == groupName)
+          .map((a) => a.id)
+          .toList();
+      for (final id in removedIds) {
+        _activityProgress.remove(id);
+        _activityStreaks.remove(id);
+        _activityBestStreaks.remove(id);
+      }
+      await fetchActivities();
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  Future<void> renameGroup(String oldGroupName, String newGroupName) async {
+    if (isGuest || previewMode) {
+      for (final activity in _activities) {
+        if (activity.groupName == oldGroupName) {
+          activity.groupName = newGroupName;
+        }
+      }
+      _updatePreviewProgress();
+      _rebuildGroupProgress();
+      await _saveGuestActivitiesToStorage();
+      notifyListeners();
+      return;
+    }
+    try {
+      await apiService.renameGroup(
+        oldGroupName: oldGroupName,
+        newGroupName: newGroupName,
+      );
+      await fetchActivities();
+    } catch (e) {
+      _error = e.toString();
+      notifyListeners();
+      rethrow;
+    }
+  }
+
+  Future<void> toggleActivityCompletion(String activityId, bool isCompleted, {String? date}) async {
+    final targetDate = date ?? _todayDateString();
+    _currentDate = targetDate;
+    // 1. Snappy optimistic update
+    final index = _activities.indexWhere((a) => a.id == activityId);
+    if (index != -1) {
+      _activities[index].isCompleted = isCompleted;
+      _activityProgress[activityId] = isCompleted ? 100 : 0;
+      if (isCompleted) {
+        _activityStreaks[activityId] = (_activityStreaks[activityId] ?? 0) + 1;
+        if ((_activityStreaks[activityId] ?? 0) > (_activityBestStreaks[activityId] ?? 0)) {
+          _activityBestStreaks[activityId] = _activityStreaks[activityId]!;
+        }
+      } else {
+        if ((_activityStreaks[activityId] ?? 0) > 0) {
+          _activityStreaks[activityId] = (_activityStreaks[activityId]! - 1);
+        }
+      }
+      _updatePreviewProgress();
+      _rebuildGroupProgress();
+      if (isCompleted) {
+        _guestCompletions['$activityId:$targetDate'] = true;
+      } else {
+        _guestCompletions.remove('$activityId:$targetDate');
+      }
+      await _saveGuestActivitiesToStorage();
+      notifyListeners();
+    }
+
+    if (isGuest || previewMode) return;
+
+    try {
+      if (isCompleted) {
+        await apiService.completeActivity(activityId: activityId, date: targetDate);
+      } else {
+        await apiService.uncompleteActivity(activityId: activityId, date: targetDate);
+      }
+      await fetchDailyProgress(date: targetDate);
+      notifyListeners();
+    } catch (e) {
+      // Keep local completion if backend is unreachable
+      debugPrint('Sync completion to backend skipped: $e');
+    }
+  }
+
+  void _updatePreviewProgress() {
+    final total = _activities.length;
+    final completed = _activities.where((activity) => activity.isCompleted).length;
+    _dailyProgress = DailyProgress(
+      date: _currentDate,
+      completed: completed,
+      total: total,
+      percentage: total == 0 ? 0 : ((completed / total) * 100).round(),
+    );
+  }
+
+  /// Calculates period range based on preset and returns computed statistics
+  DateTimeRange getRangeForPeriod(String period, {DateTimeRange? customRange}) {
+    final today = DateTime(DateTime.now().year, DateTime.now().month, DateTime.now().day);
+    if (period == 'Today') {
+      return DateTimeRange(start: today, end: today);
+    } else if (period == 'This Week') {
+      final start = today.subtract(Duration(days: today.weekday - 1));
+      return DateTimeRange(start: start, end: today);
+    } else if (period == 'This Month') {
+      final start = DateTime(today.year, today.month, 1);
+      return DateTimeRange(start: start, end: today);
+    } else if (period == 'This Year') {
+      final start = DateTime(today.year, 1, 1);
+      return DateTimeRange(start: start, end: today);
+    } else if (period == 'Custom Range' && customRange != null) {
+      return customRange;
+    }
+    return DateTimeRange(start: today, end: today);
+  }
+}
