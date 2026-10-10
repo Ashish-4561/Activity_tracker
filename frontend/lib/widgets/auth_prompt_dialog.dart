@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import '../screens/auth/login_screen.dart';
 import '../screens/auth/signup_screen.dart';
 import '../services/theme_service.dart';
+import 'daytrack_logo.dart';
 
 class AuthPromptDialog extends StatelessWidget {
   final String title;
@@ -56,27 +57,11 @@ class AuthPromptDialog extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Container(
-              width: 64,
-              height: 64,
-              decoration: BoxDecoration(
-                gradient: const LinearGradient(
-                  colors: [AppColors.cyanAccent, AppColors.primary],
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                ),
-                borderRadius: BorderRadius.circular(20),
-                boxShadow: [
-                  BoxShadow(
-                    color: AppColors.cyanAccent.withValues(alpha: 0.35),
-                    blurRadius: 16,
-                    offset: const Offset(0, 6),
-                  ),
-                ],
-              ),
-              child: const Icon(Icons.cloud_upload_rounded, size: 32, color: Colors.black),
+            const DayTrackLogo(
+              variant: DayTrackLogoVariant.iconOnly,
+              iconSize: 64,
             ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 18),
             Text(
               title,
               textAlign: TextAlign.center,

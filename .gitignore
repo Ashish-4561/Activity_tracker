@@ -36,3 +36,20 @@ data/
 .parcel-cache
 *.log
 npm-debug.log*
+
+
+# Additional environment files
+.env.*
+!.env.example
+!.env.*.example
+
+# Signing keys and credentials
+*.jks
+*.keystore
+key.properties
+service-account*.json
+secrets/
+
+# Flutter generated files
+.flutter-plugins
+.flutter-plugins-dependencies

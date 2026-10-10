@@ -6,6 +6,7 @@ import '../../services/api_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/theme_service.dart';
 import '../../widgets/auth_prompt_dialog.dart';
+import '../../widgets/daytrack_logo.dart';
 import '../../widgets/neumorphic_card.dart';
 import '../../widgets/progress_ring.dart';
 import '../profile/profile_screen.dart';
@@ -318,51 +319,58 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
                   child: ListView(
                     padding: const EdgeInsets.fromLTRB(20, 16, 20, 40),
                     children: [
-                      // ── Top Header: Greeting + Actions ─────────────────────────
+                      // ── Top Brand Header & Profile ──────────────────────────────
                       Row(
-                    crossAxisAlignment: CrossAxisAlignment.center,
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              '${_getGreeting()}, $userName',
-                              style: theme.textTheme.headlineSmall?.copyWith(
-                                fontWeight: FontWeight.w800,
-                                letterSpacing: -0.5,
-                              ),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                            ),
-                            const SizedBox(height: 2),
-                            Text(
-                              DateFormat('EEEE, MMMM d').format(DateTime.now()),
-                              style: theme.textTheme.bodyMedium?.copyWith(
-                                color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
-                                fontWeight: FontWeight.w500,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-
-                      IconButton(
-                        tooltip: 'Profile & Settings',
-                        icon: Container(
-                          padding: const EdgeInsets.all(8),
-                          decoration: BoxDecoration(
-                            color: isDark ? AppColors.darkSurfaceRaised : const Color(0xFFF1F5F9),
-                            borderRadius: BorderRadius.circular(12),
-                            border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        crossAxisAlignment: CrossAxisAlignment.center,
+                        children: [
+                          const DayTrackLogo(
+                            variant: DayTrackLogoVariant.horizontal,
+                            iconSize: 36,
+                            size: 19,
+                            showTagline: true,
                           ),
-                          child: Icon(Icons.person_rounded, size: 20, color: AppColors.primary),
-                        ),
-                        onPressed: () => _showProfileMenu(context),
+                          IconButton(
+                            tooltip: 'Profile & Settings',
+                            icon: Container(
+                              padding: const EdgeInsets.all(8),
+                              decoration: BoxDecoration(
+                                color: isDark ? AppColors.darkSurfaceRaised : const Color(0xFFF1F5F9),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                              ),
+                              child: const Icon(Icons.person_rounded, size: 20, color: AppColors.primary),
+                            ),
+                            onPressed: () => _showProfileMenu(context),
+                          ),
+                        ],
                       ),
-                    ],
-                  ),
-                  const SizedBox(height: 18),
+                      const SizedBox(height: 14),
+
+                      // ── Greeting Row ───────────────────────────────────────────
+                      Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            '${_getGreeting()}, $userName',
+                            style: theme.textTheme.headlineSmall?.copyWith(
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: -0.5,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            DateFormat('EEEE, MMMM d').format(DateTime.now()),
+                            style: theme.textTheme.bodyMedium?.copyWith(
+                              color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 18),
 
                   // ── Guest Trial Status Banner ──────────────────────────────
                   if (auth.isGuest) ...[

@@ -2,13 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../services/activity_service.dart';
 import '../services/theme_service.dart';
+import 'daytrack_logo.dart';
 
 class GuestMigrationDialog extends StatelessWidget {
   const GuestMigrationDialog({super.key});
 
   static Future<void> showIfGuestHasData(BuildContext context) async {
     final activityService = context.read<ActivityService>();
-    if (activityService.activities.isEmpty) return;
+    if (!activityService.hasGuestActivities) return;
 
     final shouldMigrate = await showDialog<bool>(
       context: context,
@@ -18,9 +19,9 @@ class GuestMigrationDialog extends StatelessWidget {
 
     if (shouldMigrate == true) {
       await activityService.migrateGuestDataToCloud();
-    } else {
-      await activityService.fetchActivities();
     }
+    await activityService.clearGuestData();
+    await activityService.fetchActivities();
   }
 
   @override
@@ -53,17 +54,9 @@ class GuestMigrationDialog extends StatelessWidget {
           children: [
             Row(
               children: [
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    gradient: const LinearGradient(
-                      colors: [AppColors.cyanAccent, AppColors.primary],
-                      begin: Alignment.topLeft,
-                      end: Alignment.bottomRight,
-                    ),
-                    borderRadius: BorderRadius.circular(14),
-                  ),
-                  child: const Icon(Icons.sync_rounded, color: Colors.black, size: 24),
+                const DayTrackLogo(
+                  variant: DayTrackLogoVariant.iconOnly,
+                  iconSize: 42,
                 ),
                 const SizedBox(width: 14),
                 const Expanded(

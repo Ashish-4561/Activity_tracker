@@ -6,7 +6,7 @@ import 'services/auth_service.dart';
 import 'services/activity_service.dart';
 import 'services/api_service.dart';
 import 'services/theme_service.dart';
-import 'screens/app_shell.dart';
+import 'screens/splash/splash_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -61,12 +61,12 @@ class ActivityTrackerApp extends StatelessWidget {
       child: Consumer<ThemeService>(
         builder: (context, themeService, _) {
           return MaterialApp(
-            title: 'Activity Tracker',
+            title: 'DayTrack - Activity Tracker',
             debugShowCheckedModeBanner: false,
             theme: ThemeService.lightTheme,
             darkTheme: ThemeService.darkTheme,
             themeMode: themeService.themeMode,
-            home: const AppShell(),
+            home: const SplashScreen(),
           );
         },
       ),

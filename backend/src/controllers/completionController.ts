@@ -51,7 +51,7 @@ export async function completeActivity(req: AuthRequest, res: Response): Promise
       await db.run(
         `INSERT INTO activity_completions (id, activity_id, user_id, group_name, date, completed, completed_at)
          VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`,
-        [completionId, activity_id, req.userId, activity.group_name || 'General', targetDate, 1]
+        [completionId, activity_id, req.userId, activity.group_name || 'General', targetDate, true]
       );
     }
 

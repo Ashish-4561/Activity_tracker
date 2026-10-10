@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
 import '../../services/theme_service.dart';
+import '../../widgets/daytrack_logo.dart';
 import '../../widgets/guest_migration_dialog.dart';
 import '../../widgets/neumorphic_card.dart';
 import '../app_shell.dart';
@@ -29,9 +30,49 @@ class _LoginScreenState extends State<LoginScreen> {
   bool _otpSent = false;
   int _resendCountdown = 0;
   Timer? _countdownTimer;
+  bool _hasNavigated = false;
+
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final auth = context.read<AuthService>();
+      if (auth.isLoggedIn) {
+        _navigateToHome();
+      } else {
+        auth.addListener(_onAuthStatusChanged);
+      }
+    });
+  }
+
+  void _onAuthStatusChanged() {
+    if (!mounted || _hasNavigated) return;
+    final auth = context.read<AuthService>();
+    if (auth.isLoggedIn) {
+      _navigateToHome();
+    }
+  }
+
+  Future<void> _navigateToHome() async {
+    if (_hasNavigated || !mounted) return;
+    _hasNavigated = true;
+    final userName = context.read<AuthService>().currentUser?.name ?? 'User';
+    _showMessage('Successfully logged in! Welcome, $userName.', isError: false);
+    await GuestMigrationDialog.showIfGuestHasData(context);
+    if (mounted) {
+      Navigator.of(context).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => const AppShell()),
+        (_) => false,
+      );
+    }
+  }
 
   @override
   void dispose() {
+    try {
+      context.read<AuthService>().removeListener(_onAuthStatusChanged);
+    } catch (_) {}
     _emailController.dispose();
     _passwordController.dispose();
     _phoneController.dispose();
@@ -45,7 +86,7 @@ class _LoginScreenState extends State<LoginScreen> {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
-        backgroundColor: isError ? AppColors.roseError : null,
+        backgroundColor: isError ? AppColors.roseError : AppColors.emeraldSuccess,
         behavior: SnackBarBehavior.floating,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       ),
@@ -62,13 +103,11 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     final authService = context.read<AuthService>();
-    final nav = Navigator.of(context);
 
     try {
       await authService.login(email: email, password: password);
       if (mounted) {
-        await GuestMigrationDialog.showIfGuestHasData(context);
-        nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const AppShell()), (_) => false);
+        await _navigateToHome();
       }
     } catch (e) {
       _showMessage(e.toString().replaceAll('Exception: ', ''), isError: true);
@@ -116,13 +155,11 @@ class _LoginScreenState extends State<LoginScreen> {
     }
 
     final authService = context.read<AuthService>();
-    final nav = Navigator.of(context);
 
     try {
       await authService.verifyPhoneOtp(phone, otp);
       if (mounted) {
-        await GuestMigrationDialog.showIfGuestHasData(context);
-        nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const AppShell()), (_) => false);
+        await _navigateToHome();
       }
     } catch (e) {
       _showMessage(e.toString().replaceAll('Exception: ', ''), isError: true);
@@ -131,15 +168,11 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _handleGoogleSignIn() async {
     final authService = context.read<AuthService>();
-    final nav = Navigator.of(context);
 
     try {
-      final launched = await authService.signInWithGoogleOAuth();
-      if (launched && mounted) {
-        if (authService.isLoggedIn) {
-          await GuestMigrationDialog.showIfGuestHasData(context);
-          nav.pushAndRemoveUntil(MaterialPageRoute(builder: (_) => const AppShell()), (_) => false);
-        }
+      await authService.signInWithGoogleOAuth();
+      if (mounted && authService.isLoggedIn) {
+        await _navigateToHome();
       }
     } catch (e) {
       _showMessage(e.toString().replaceAll('Exception: ', ''), isError: true);
@@ -166,46 +199,11 @@ class _LoginScreenState extends State<LoginScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              gradient: const LinearGradient(
-                                colors: [AppColors.primaryGradientStart, AppColors.primaryGradientEnd],
-                              ),
-                              borderRadius: BorderRadius.circular(16),
-                              boxShadow: [
-                                BoxShadow(
-                                  color: AppColors.primary.withValues(alpha: 0.35),
-                                  blurRadius: 10,
-                                  offset: const Offset(0, 4),
-                                ),
-                              ],
-                            ),
-                            child: const Icon(Icons.track_changes_rounded, color: Colors.white, size: 26),
-                          ),
-                          const SizedBox(width: 14),
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                'Activity Tracker',
-                                style: theme.textTheme.titleMedium?.copyWith(
-                                  fontWeight: FontWeight.w800,
-                                  color: AppColors.primary,
-                                ),
-                              ),
-                              Text(
-                                'Encrypted & Multi-Profile',
-                                style: TextStyle(
-                                  fontSize: 11,
-                                  color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
-                                ),
-                              ),
-                            ],
-                          ),
-                        ],
+                      const DayTrackLogo(
+                        variant: DayTrackLogoVariant.horizontal,
+                        iconSize: 42,
+                        size: 21,
+                        showTagline: true,
                       ),
                       TextButton.icon(
                         onPressed: () {

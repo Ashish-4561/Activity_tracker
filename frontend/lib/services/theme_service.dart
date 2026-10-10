@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:google_fonts/google_fonts.dart';
 
 /// App-wide Midnight Cyan modern soft neomorphic color & styling tokens
 class AppColors {
@@ -144,9 +145,9 @@ class ThemeService extends ChangeNotifier {
     'sans-serif',
   ];
 
-  /// Light theme: soft cool porcelain background with crisp raised cards
+  /// Light theme: soft cool porcelain background with crisp raised cards & Montserrat typography
   static ThemeData get lightTheme {
-    final baseTextTheme = ThemeData.light().textTheme.apply(
+    final baseTextTheme = GoogleFonts.montserratTextTheme(ThemeData.light().textTheme).apply(
       fontFamilyFallback: fontFallbacks,
     );
 
@@ -214,12 +215,12 @@ class ThemeService extends ChangeNotifier {
           fontFamilyFallback: fontFallbacks,
         ),
       ),
-      appBarTheme: const AppBarTheme(
+      appBarTheme: AppBarTheme(
         backgroundColor: AppColors.lightBackground,
         foregroundColor: AppColors.lightTextPrimary,
         elevation: 0,
         centerTitle: false,
-        titleTextStyle: TextStyle(
+        titleTextStyle: GoogleFonts.montserrat(
           color: AppColors.lightTextPrimary,
           fontSize: 22,
           fontWeight: FontWeight.w800,
@@ -242,7 +243,7 @@ class ThemeService extends ChangeNotifier {
           elevation: 0,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+          textStyle: GoogleFonts.montserrat(fontWeight: FontWeight.w700, fontSize: 15),
         ),
       ),
       progressIndicatorTheme: const ProgressIndicatorThemeData(
@@ -255,9 +256,9 @@ class ThemeService extends ChangeNotifier {
         indicatorColor: const Color(0xFFE0F7FA),
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) {
-            return const TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppColors.lightPrimaryAccent);
+            return GoogleFonts.montserrat(fontWeight: FontWeight.w700, fontSize: 12, color: AppColors.lightPrimaryAccent);
           }
-          return const TextStyle(fontWeight: FontWeight.w500, fontSize: 12, color: AppColors.lightTextSecondary);
+          return GoogleFonts.montserrat(fontWeight: FontWeight.w500, fontSize: 12, color: AppColors.lightTextSecondary);
         }),
         iconTheme: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) {
@@ -269,9 +270,9 @@ class ThemeService extends ChangeNotifier {
     );
   }
 
-  /// Dark theme: deep Midnight Cyan background, soft raised cards, cyan accents
+  /// Dark theme: deep Midnight Cyan background, soft raised cards, cyan accents & Montserrat typography
   static ThemeData get darkTheme {
-    final baseTextTheme = ThemeData.dark().textTheme.apply(
+    final baseTextTheme = GoogleFonts.montserratTextTheme(ThemeData.dark().textTheme).apply(
       fontFamilyFallback: fontFallbacks,
     );
 
@@ -339,12 +340,12 @@ class ThemeService extends ChangeNotifier {
           fontFamilyFallback: fontFallbacks,
         ),
       ),
-      appBarTheme: const AppBarTheme(
+      appBarTheme: AppBarTheme(
         backgroundColor: AppColors.darkBackground,
         foregroundColor: AppColors.darkTextPrimary,
         elevation: 0,
         centerTitle: false,
-        titleTextStyle: TextStyle(
+        titleTextStyle: GoogleFonts.montserrat(
           color: AppColors.darkTextPrimary,
           fontSize: 22,
           fontWeight: FontWeight.w800,
@@ -367,7 +368,7 @@ class ThemeService extends ChangeNotifier {
           elevation: 0,
           shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 14),
-          textStyle: const TextStyle(fontWeight: FontWeight.w700, fontSize: 15),
+          textStyle: GoogleFonts.montserrat(fontWeight: FontWeight.w700, fontSize: 15),
         ),
       ),
       progressIndicatorTheme: const ProgressIndicatorThemeData(
@@ -380,9 +381,9 @@ class ThemeService extends ChangeNotifier {
         indicatorColor: const Color(0xFF1A3340),
         labelTextStyle: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) {
-            return const TextStyle(fontWeight: FontWeight.w700, fontSize: 12, color: AppColors.darkPrimaryAccent);
+            return GoogleFonts.montserrat(fontWeight: FontWeight.w700, fontSize: 12, color: AppColors.darkPrimaryAccent);
           }
-          return const TextStyle(fontWeight: FontWeight.w500, fontSize: 12, color: AppColors.darkTextSecondary);
+          return GoogleFonts.montserrat(fontWeight: FontWeight.w500, fontSize: 12, color: AppColors.darkTextSecondary);
         }),
         iconTheme: WidgetStateProperty.resolveWith((states) {
           if (states.contains(WidgetState.selected)) {

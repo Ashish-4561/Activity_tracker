@@ -1,14 +1,19 @@
 services:
+  # ── DayTrack Backend Web Service ──────────────────────────────────────────
   - type: web
-    name: activity-tracker-backend
+    name: daytrack-backend
     runtime: node
     rootDir: backend
     plan: free
+    region: oregon
     buildCommand: npm install && npm run build
     startCommand: npm start
+    healthCheckPath: /api/health
     envVars:
       - key: NODE_ENV
         value: production
+      - key: PORT
+        value: 10000
       - key: DATABASE_URL
         sync: false
       - key: SUPABASE_URL
@@ -21,5 +26,7 @@ services:
         value: 7d
       - key: AI_PROVIDER
         value: openai
+      - key: OPENAI_API_KEY
+        sync: false
       - key: OPENAI_MODEL
         value: gpt-4o-mini

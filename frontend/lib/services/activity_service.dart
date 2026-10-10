@@ -233,12 +233,20 @@ class ActivityService extends ChangeNotifier {
   bool get hasGuestActivities => isGuest && _activities.isNotEmpty;
 
   void _onAuthChanged() {
+    clearData();
     if (authService.isLoggedIn) {
+      final userId = authService.currentUser?.id;
+      if (userId != null && userId.isNotEmpty) {
+        _loadUserActivitiesFromStorage(userId);
+      }
       fetchActivities();
       fetchDailyProgress();
     } else {
-      clearData();
-      _loadGuestActivitiesFromStorage();
+      // User logged out: clear memory and ensure guest mode has no lingering user tasks
+      _activities = [];
+      _guestCompletions.clear();
+      _dailyProgress = null;
+      notifyListeners();
     }
   }
 
@@ -343,6 +351,7 @@ class ActivityService extends ChangeNotifier {
       await _loadGuestActivitiesFromStorage();
       return;
     }
+    final currentUserId = authService.currentUser?.id;
     _isLoading = true;
     _error = null;
     notifyListeners();
@@ -371,13 +380,19 @@ class ActivityService extends ChangeNotifier {
               })
               .toList() ??
           [];
+      if (currentUserId != null && currentUserId.isNotEmpty) {
+        await _saveUserActivitiesToStorage(currentUserId);
+      }
       _isLoading = false;
       notifyListeners();
       await fetchActivityProgress();
       await fetchDailyProgress(date: targetDate);
     } catch (e) {
-      // If network fails (e.g. mobile cannot reach localhost:5000), fall back to local storage
-      await _loadGuestActivitiesFromStorage();
+      if (currentUserId != null && currentUserId.isNotEmpty) {
+        await _loadUserActivitiesFromStorage(currentUserId);
+      } else {
+        _activities = [];
+      }
       _isLoading = false;
       notifyListeners();
     }
@@ -543,6 +558,52 @@ class ActivityService extends ChangeNotifier {
     _rebuildGroupProgress();
   }
 
+  String _getUserActivitiesKey(String userId) => 'user_activities_$userId';
+  String _getUserCompletionsKey(String userId) => 'user_completions_$userId';
+
+  Future<void> _loadUserActivitiesFromStorage(String userId) async {
+    if (userId.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_getUserActivitiesKey(userId));
+      if (raw != null && raw.isNotEmpty) {
+        final List<dynamic> list = jsonDecode(raw);
+        _activities = list
+            .map((item) => Activity.fromJson(Map<String, dynamic>.from(item as Map)))
+            .toList();
+      } else {
+        _activities = [];
+      }
+
+      final rawComp = prefs.getString(_getUserCompletionsKey(userId));
+      if (rawComp != null && rawComp.isNotEmpty) {
+        final Map<String, dynamic> compMap = jsonDecode(rawComp);
+        _guestCompletions = compMap.map((k, v) => MapEntry(k, v == true));
+      } else {
+        _guestCompletions = {};
+      }
+
+      _currentDate = _todayDateString();
+      _syncGuestActivitiesForDate(_currentDate);
+    } catch (_) {
+      _activities = [];
+      _guestCompletions = {};
+    }
+    _rebuildPreviewProgress();
+    _updatePreviewProgress();
+    notifyListeners();
+  }
+
+  Future<void> _saveUserActivitiesToStorage(String userId) async {
+    if (userId.isEmpty) return;
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = jsonEncode(_activities.map((a) => a.toJson()).toList());
+      await prefs.setString(_getUserActivitiesKey(userId), raw);
+      await prefs.setString(_getUserCompletionsKey(userId), jsonEncode(_guestCompletions));
+    } catch (_) {}
+  }
+
   Future<void> _loadGuestActivitiesFromStorage() async {
     try {
       final prefs = await SharedPreferences.getInstance();
@@ -573,8 +634,6 @@ class ActivityService extends ChangeNotifier {
         }
 
         // Apply completion status for TODAY's date.
-        // If today is a new day and there is no completion record for today,
-        // act.isCompleted resets to FALSE!
         _currentDate = _todayDateString();
         _syncGuestActivitiesForDate(_currentDate);
       }
@@ -588,6 +647,7 @@ class ActivityService extends ChangeNotifier {
   }
 
   Future<void> _saveGuestActivitiesToStorage() async {
+    if (!isGuest && !previewMode) return;
     try {
       final prefs = await SharedPreferences.getInstance();
       final raw = jsonEncode(_activities.map((a) => a.toJson()).toList());
@@ -598,9 +658,11 @@ class ActivityService extends ChangeNotifier {
   }
 
   Future<void> clearGuestData() async {
-    _activities = [];
-    _guestCompletions.clear();
-    clearData();
+    if (isGuest) {
+      _activities = [];
+      _guestCompletions.clear();
+      clearData();
+    }
     try {
       final prefs = await SharedPreferences.getInstance();
       await prefs.setString(_kGuestActivitiesKey, jsonEncode([]));
@@ -650,6 +712,7 @@ class ActivityService extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    final currentUserId = authService.currentUser?.id;
     try {
       await apiService.createActivity(
         name: name,
@@ -667,11 +730,11 @@ class ActivityService extends ChangeNotifier {
       await fetchActivities();
       await fetchDailyProgress();
     } catch (e) {
-      // Fallback: save locally so the user can continue using the app
+      // Fallback: save to user local storage if logged in, or guest storage if guest
       final now = DateTime.now().toIso8601String();
       _activities.add(Activity(
         id: 'local-${DateTime.now().microsecondsSinceEpoch}',
-        userId: authService.currentUser?.id ?? 'local-user',
+        userId: currentUserId ?? 'local-user',
         name: name,
         frequency: frequency,
         startDate: startDate ?? DateTime.now().toIso8601String().split('T').first,
@@ -689,7 +752,11 @@ class ActivityService extends ChangeNotifier {
       ));
       _updatePreviewProgress();
       _rebuildPreviewProgress();
-      await _saveGuestActivitiesToStorage();
+      if (currentUserId != null && currentUserId.isNotEmpty) {
+        await _saveUserActivitiesToStorage(currentUserId);
+      } else {
+        await _saveGuestActivitiesToStorage();
+      }
       notifyListeners();
     }
   }
@@ -871,7 +938,12 @@ class ActivityService extends ChangeNotifier {
       } else {
         _guestCompletions.remove('$activityId:$targetDate');
       }
-      await _saveGuestActivitiesToStorage();
+      final currentUserId = authService.currentUser?.id;
+      if (currentUserId != null && currentUserId.isNotEmpty) {
+        await _saveUserActivitiesToStorage(currentUserId);
+      } else {
+        await _saveGuestActivitiesToStorage();
+      }
       notifyListeners();
     }
 
@@ -886,7 +958,7 @@ class ActivityService extends ChangeNotifier {
       await fetchDailyProgress(date: targetDate);
       notifyListeners();
     } catch (e) {
-      // Keep local completion if backend is unreachable
+      // Keep local completion in user storage if backend is unreachable
       debugPrint('Sync completion to backend skipped: $e');
     }
   }

@@ -4,6 +4,7 @@ import '../../services/auth_service.dart';
 import '../../services/activity_service.dart';
 import '../../services/theme_service.dart';
 import '../../widgets/auth_prompt_dialog.dart';
+import '../../widgets/daytrack_logo.dart';
 import '../../widgets/neumorphic_card.dart';
 import '../auth/login_screen.dart';
 import '../auth/signup_screen.dart';
@@ -538,6 +539,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
                 style: OutlinedButton.styleFrom(
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
+              ),
+            ),
+            const SizedBox(height: 36),
+
+            // DayTrack Branding Footer
+            Center(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const DayTrackLogo(
+                    variant: DayTrackLogoVariant.compact,
+                    iconSize: 26,
+                    size: 16,
+                  ),
+                  const SizedBox(height: 6),
+                  Text(
+                    'Version 1.0.0 • Personal Daily Productivity',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
+                      fontWeight: FontWeight.w500,
+                    ),
+                  ),
+                ],
               ),
             ),
           ],

@@ -44,7 +44,7 @@ export async function createActivity(req: AuthRequest, res: Response): Promise<v
     await db.run(
       `INSERT INTO activities (id, user_id, name, group_name, icon, frequency, start_date, frequency_value, frequency_unit, duration_value, duration_unit, color, description, is_active)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [activityId, req.userId, name.trim(), group_name || 'General', icon || null, normalizedFrequency, startDate, frequencyValue, normalizedUnit, durationValue, normalizedDurationUnit, color || null, description || null, 1]
+      [activityId, req.userId, name.trim(), group_name || 'General', icon || null, normalizedFrequency, startDate, frequencyValue, normalizedUnit, durationValue, normalizedDurationUnit, color || null, description || null, true]
     );
 
     res.status(201).json({
@@ -83,7 +83,7 @@ export async function getActivities(req: AuthRequest, res: Response): Promise<vo
 
     const activities = await db.all<Activity[]>(
       `SELECT a.*, 
-              COALESCE(ac.completed, 0) as completed,
+              CASE WHEN ac.completed = true OR ac.completed = 1 THEN 1 ELSE 0 END as completed,
               ac.completed_at
        FROM activities a
        LEFT JOIN activity_completions ac 

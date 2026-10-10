@@ -105,7 +105,42 @@ class AuthService extends ChangeNotifier {
         await prefs.setString(AppConfig.guestTrialStartKey, _guestTrialStartTime!.toIso8601String());
       }
 
-      // Check active Supabase session first
+      // Always listen for Supabase auth state changes (Google OAuth callback, sign in, token refresh, etc.)
+      try {
+        Supabase.instance.client.auth.onAuthStateChange.listen((data) async {
+          final event = data.event;
+          final session = data.session;
+          if (session != null && (event == AuthChangeEvent.signedIn || event == AuthChangeEvent.tokenRefreshed || event == AuthChangeEvent.userUpdated || event == AuthChangeEvent.initialSession)) {
+            final supabaseUser = session.user;
+            _currentUser = User(
+              id: supabaseUser.id,
+              name: supabaseUser.userMetadata?['full_name'] ??
+                  supabaseUser.userMetadata?['name'] ??
+                  supabaseUser.email?.split('@').first ??
+                  'User',
+              email: supabaseUser.email,
+              profileImage: supabaseUser.userMetadata?['avatar_url'] ??
+                  supabaseUser.userMetadata?['picture'],
+              theme: 'light',
+              aiEnabled: true,
+              authProvider: supabaseUser.appMetadata['provider']?.toString() ?? 'google',
+            );
+            _authState = AuthState.authenticated;
+            await apiService.setToken(session.accessToken);
+            try {
+              await fetchProfile();
+            } catch (_) {}
+            notifyListeners();
+          } else if (event == AuthChangeEvent.signedOut) {
+            _currentUser = null;
+            _authState = AuthState.guest;
+            await apiService.clearToken();
+            notifyListeners();
+          }
+        });
+      } catch (_) {}
+
+      // Check active Supabase session on startup
       try {
         final currentSession = Supabase.instance.client.auth.currentSession;
         if (currentSession != null) {
@@ -125,41 +160,12 @@ class AuthService extends ChangeNotifier {
           );
           _authState = AuthState.authenticated;
           await apiService.setToken(currentSession.accessToken);
+          try {
+            await fetchProfile();
+          } catch (_) {}
           notifyListeners();
           return;
         }
-      } catch (_) {}
-
-      // Listen for Supabase auth state changes (e.g. Google OAuth redirect callback)
-      try {
-        Supabase.instance.client.auth.onAuthStateChange.listen((data) async {
-          final event = data.event;
-          final session = data.session;
-          if (session != null && (event == AuthChangeEvent.signedIn || event == AuthChangeEvent.tokenRefreshed)) {
-            final supabaseUser = session.user;
-            _currentUser = User(
-              id: supabaseUser.id,
-              name: supabaseUser.userMetadata?['full_name'] ??
-                  supabaseUser.userMetadata?['name'] ??
-                  supabaseUser.email?.split('@').first ??
-                  'User',
-              email: supabaseUser.email,
-              profileImage: supabaseUser.userMetadata?['avatar_url'] ??
-                  supabaseUser.userMetadata?['picture'],
-              theme: 'light',
-              aiEnabled: true,
-              authProvider: supabaseUser.appMetadata['provider']?.toString() ?? 'google',
-            );
-            _authState = AuthState.authenticated;
-            await apiService.setToken(session.accessToken);
-            notifyListeners();
-          } else if (event == AuthChangeEvent.signedOut) {
-            _currentUser = null;
-            _authState = AuthState.guest;
-            await apiService.clearToken();
-            notifyListeners();
-          }
-        });
       } catch (_) {}
 
       final token = await apiService.getToken();
@@ -317,10 +323,28 @@ class AuthService extends ChangeNotifier {
         throw const AuthException('Login failed: Invalid credentials or unconfirmed email.');
       }
 
-      await apiService.setToken(session.accessToken);
-      await fetchProfile();
-
+      _currentUser = User(
+        id: supabaseUser.id,
+        name: supabaseUser.userMetadata?['full_name'] ??
+            supabaseUser.userMetadata?['name'] ??
+            supabaseUser.email?.split('@').first ??
+            'User',
+        email: supabaseUser.email,
+        profileImage: supabaseUser.userMetadata?['avatar_url'] ??
+            supabaseUser.userMetadata?['picture'],
+        theme: 'light',
+        aiEnabled: true,
+        authProvider: supabaseUser.appMetadata['provider']?.toString() ?? 'email',
+      );
       _authState = AuthState.authenticated;
+      await apiService.setToken(session.accessToken);
+
+      try {
+        await fetchProfile();
+      } catch (_) {
+        // Non-fatal profile enrichment failure: user is already logged in
+      }
+
       _isLoading = false;
       notifyListeners();
     } on AuthException catch (e) {
@@ -408,7 +432,7 @@ class AuthService extends ChangeNotifier {
     }
   }
 
-  /// Triggers native Google OAuth via Supabase
+  /// In-app Google Sign-In (opens in-app view directly inside the app without switching to Chrome)
   Future<bool> signInWithGoogleOAuth() async {
     _isLoading = true;
     _error = null;
@@ -427,7 +451,7 @@ class AuthService extends ChangeNotifier {
         OAuthProvider.google,
         redirectTo: redirectUrl,
         authScreenLaunchMode:
-            kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
+            kIsWeb ? LaunchMode.platformDefault : LaunchMode.inAppBrowserView,
       );
 
       _isLoading = false;
@@ -497,10 +521,36 @@ class AuthService extends ChangeNotifier {
   Future<void> fetchProfile() async {
     try {
       final response = await apiService.getProfile();
-      _currentUser = User.fromJson(response['user']);
+      if (response['user'] != null) {
+        _currentUser = User.fromJson(response['user']);
+      }
       _authState = AuthState.authenticated;
       notifyListeners();
     } catch (e) {
+      if (_currentUser == null) {
+        try {
+          final currentSession = Supabase.instance.client.auth.currentSession;
+          if (currentSession != null) {
+            final supabaseUser = currentSession.user;
+            _currentUser = User(
+              id: supabaseUser.id,
+              name: supabaseUser.userMetadata?['full_name'] ??
+                  supabaseUser.userMetadata?['name'] ??
+                  supabaseUser.email?.split('@').first ??
+                  'User',
+              email: supabaseUser.email,
+              profileImage: supabaseUser.userMetadata?['avatar_url'] ??
+                  supabaseUser.userMetadata?['picture'],
+              theme: 'light',
+              aiEnabled: true,
+              authProvider: supabaseUser.appMetadata['provider']?.toString() ?? 'email',
+            );
+            _authState = AuthState.authenticated;
+            notifyListeners();
+            return;
+          }
+        } catch (_) {}
+      }
       _error = 'Failed to fetch profile';
       notifyListeners();
       rethrow;

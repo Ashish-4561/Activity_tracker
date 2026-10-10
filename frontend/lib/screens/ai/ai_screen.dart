@@ -6,6 +6,7 @@ import '../../services/api_service.dart';
 import '../../services/auth_service.dart';
 import '../../services/theme_service.dart';
 import '../../widgets/auth_prompt_dialog.dart';
+import '../../widgets/daytrack_logo.dart';
 import '../../widgets/neumorphic_card.dart';
 
 class AiScreen extends StatefulWidget {
@@ -337,15 +338,9 @@ class _AiScreenState extends State<AiScreen> {
                   borderRadius: 18,
                   child: Row(
                     children: [
-                      Container(
-                        padding: const EdgeInsets.all(10),
-                        decoration: BoxDecoration(
-                          gradient: const LinearGradient(
-                            colors: [AppColors.primaryGradientStart, AppColors.primaryGradientEnd],
-                          ),
-                          shape: BoxShape.circle,
-                        ),
-                        child: const Icon(Icons.auto_awesome_rounded, color: Colors.white, size: 22),
+                      const DayTrackLogo(
+                        variant: DayTrackLogoVariant.iconOnly,
+                        iconSize: 38,
                       ),
                       const SizedBox(width: 14),
                       Expanded(

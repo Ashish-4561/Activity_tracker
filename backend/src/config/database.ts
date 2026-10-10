@@ -144,6 +144,7 @@ async function createPostgresTables(pool: Pool): Promise<void> {
 
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
+      auth_user_id TEXT UNIQUE,
       name TEXT NOT NULL,
       email TEXT UNIQUE,
       phone VARCHAR(30) UNIQUE,
@@ -219,6 +220,7 @@ async function createPostgresTables(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE INDEX IF NOT EXISTS idx_users_auth_user_id ON users(auth_user_id);
     CREATE INDEX IF NOT EXISTS idx_activities_user_id ON activities(user_id);
     CREATE INDEX IF NOT EXISTS idx_activities_user_active ON activities(user_id, is_active);
     CREATE INDEX IF NOT EXISTS idx_activity_completions_user_id ON activity_completions(user_id);
@@ -230,6 +232,8 @@ async function createPostgresTables(pool: Pool): Promise<void> {
 
   // Run dynamic schema migrations on users table if needed
   try {
+    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_user_id TEXT;`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_auth_user_id ON users(auth_user_id);`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(30) UNIQUE;`);
     await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) DEFAULT 'email';`);
     await pool.query(`ALTER TABLE users ALTER COLUMN email DROP NOT NULL;`);
@@ -243,10 +247,13 @@ async function createSqliteTables(db: SqliteDatabase): Promise<void> {
   await db.exec(`
     CREATE TABLE IF NOT EXISTS users (
       id TEXT PRIMARY KEY,
+      auth_user_id TEXT UNIQUE,
       name TEXT NOT NULL,
-      email TEXT UNIQUE NOT NULL,
-      password_hash TEXT NOT NULL,
+      email TEXT UNIQUE,
+      phone VARCHAR(30) UNIQUE,
+      password_hash TEXT,
       profile_image TEXT,
+      auth_provider TEXT DEFAULT 'email',
       theme TEXT DEFAULT 'light',
       ai_enabled INTEGER DEFAULT 1,
       ai_suggestions_enabled INTEGER DEFAULT 1,
@@ -333,6 +340,10 @@ export function parseDatabaseUrl(databaseUrl: string): PoolConfig {
       ssl: {
         rejectUnauthorized: false,
       },
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+      keepAlive: true,
     };
   } catch {
     return {
@@ -340,6 +351,10 @@ export function parseDatabaseUrl(databaseUrl: string): PoolConfig {
       ssl: {
         rejectUnauthorized: false,
       },
+      max: 10,
+      idleTimeoutMillis: 30000,
+      connectionTimeoutMillis: 10000,
+      keepAlive: true,
     };
   }
 }
@@ -357,6 +372,11 @@ export async function initializeDatabase(): Promise<AppDatabase> {
       const config = parseDatabaseUrl(databaseUrl);
 
       pgPool = new Pool(config);
+
+      // Prevent uncaught ECONNRESET on idle clients from crashing Node process
+      pgPool.on('error', (err: any) => {
+        console.warn('ℹ Supabase pool idle client reset (auto-reconnecting):', err.message || err);
+      });
 
       // Test connection
       const client = await pgPool.connect();

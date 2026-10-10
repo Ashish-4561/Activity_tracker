@@ -1,11 +1,11 @@
 {
-    "name": "activity_tracker",
-    "short_name": "activity_tracker",
+    "name": "DayTrack - Activity Tracker",
+    "short_name": "DayTrack",
     "start_url": ".",
     "display": "standalone",
-    "background_color": "#0175C2",
-    "theme_color": "#0175C2",
-    "description": "A new Flutter project.",
+    "background_color": "#F5F8FE",
+    "theme_color": "#0066FF",
+    "description": "DayTrack - Neumorphic Daily Activity & Habit Tracker.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
