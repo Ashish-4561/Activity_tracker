@@ -1,5 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
+import '../../services/auth_service.dart';
 import '../../services/theme_service.dart';
 import '../../widgets/daytrack_logo.dart';
 import '../app_shell.dart';
@@ -17,7 +19,6 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   late AnimationController _animController;
   late Animation<double> _scaleAnimation;
   late Animation<double> _fadeAnimation;
-  Timer? _timer;
 
   @override
   void initState() {
@@ -25,10 +26,10 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
     _animController = AnimationController(
       vsync: this,
-      duration: const Duration(milliseconds: 1400),
+      duration: const Duration(milliseconds: 650),
     );
 
-    _scaleAnimation = Tween<double>(begin: 0.82, end: 1.0).animate(
+    _scaleAnimation = Tween<double>(begin: 0.88, end: 1.0).animate(
       CurvedAnimation(
         parent: _animController,
         curve: Curves.easeOutBack,
@@ -38,34 +39,52 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
     _fadeAnimation = Tween<double>(begin: 0.0, end: 1.0).animate(
       CurvedAnimation(
         parent: _animController,
-        curve: const Interval(0.0, 0.7, curve: Curves.easeOut),
+        curve: Curves.easeOut,
       ),
     );
 
     _animController.forward();
 
-    // Display for ~3.5 seconds before transitioning to AppShell
-    _timer = Timer(const Duration(milliseconds: 3500), () {
-      if (!mounted) return;
-      Navigator.of(context).pushReplacement(
-        PageRouteBuilder(
-          transitionDuration: const Duration(milliseconds: 600),
-          pageBuilder: (context, animation, secondaryAnimation) =>
-              AppShell(previewMode: widget.previewMode),
-          transitionsBuilder: (context, animation, secondaryAnimation, child) {
-            return FadeTransition(
-              opacity: animation,
-              child: child,
-            );
-          },
-        ),
-      );
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _initializeAppAndNavigate();
     });
+  }
+
+  Future<void> _initializeAppAndNavigate() async {
+    // 1-second minimum splash display for snappy experience
+    await Future.delayed(const Duration(milliseconds: 1000));
+
+    if (!mounted) return;
+
+    // If device is slow or still initializing auth state, give it up to a short moment
+    try {
+      final auth = context.read<AuthService>();
+      int extraChecks = 0;
+      while (auth.authState == AuthState.loading && extraChecks < 6 && mounted) {
+        await Future.delayed(const Duration(milliseconds: 100));
+        extraChecks++;
+      }
+    } catch (_) {}
+
+    if (!mounted) return;
+
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 350),
+        pageBuilder: (context, animation, secondaryAnimation) =>
+            AppShell(previewMode: widget.previewMode),
+        transitionsBuilder: (context, animation, secondaryAnimation, child) {
+          return FadeTransition(
+            opacity: animation,
+            child: child,
+          );
+        },
+      ),
+    );
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
     _animController.dispose();
     super.dispose();
   }
@@ -83,8 +102,8 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
             // Ambient soft background glow
             Center(
               child: Container(
-                width: 280,
-                height: 280,
+                width: 260,
+                height: 260,
                 decoration: BoxDecoration(
                   shape: BoxShape.circle,
                   gradient: RadialGradient(
@@ -111,8 +130,8 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
                       scale: _scaleAnimation.value,
                       child: const DayTrackLogo(
                         variant: DayTrackLogoVariant.full,
-                        iconSize: 110,
-                        size: 34,
+                        iconSize: 105,
+                        size: 32,
                         showTagline: true,
                       ),
                     ),
@@ -121,37 +140,23 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
               ),
             ),
 
-            // Bottom loading indicator & subtitle
+            // Bottom subtle branding subtitle
             Positioned(
               left: 0,
               right: 0,
-              bottom: 48,
+              bottom: 42,
               child: FadeTransition(
                 opacity: _fadeAnimation,
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      width: 38,
-                      height: 38,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 3,
-                        valueColor: AlwaysStoppedAnimation<Color>(
-                          isDark ? AppColors.darkPrimaryAccent : AppColors.lightPrimaryAccent,
-                        ),
-                      ),
+                child: Center(
+                  child: Text(
+                    'Organize • Track • Grow',
+                    style: TextStyle(
+                      fontSize: 12,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 1.8,
+                      color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
                     ),
-                    const SizedBox(height: 16),
-                    Text(
-                      'Organize • Track • Grow',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.w600,
-                        letterSpacing: 1.8,
-                        color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
               ),
             ),

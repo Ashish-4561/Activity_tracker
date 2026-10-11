@@ -238,6 +238,414 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
     );
   }
 
+  void _showManageGroupsSheet(BuildContext context, Map<String, List<Activity>> allGroups) {
+    final groupNames = allGroups.keys.toList();
+    if (groupNames.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('No groups available to adjust.')),
+      );
+      return;
+    }
+
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final selectedForDeletion = <String>{};
+
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        return StatefulBuilder(
+          builder: (context, setSheetState) {
+            final allSelected = selectedForDeletion.length == groupNames.length && groupNames.isNotEmpty;
+
+            return Container(
+              constraints: BoxConstraints(
+                maxHeight: MediaQuery.of(context).size.height * 0.85,
+              ),
+              decoration: BoxDecoration(
+                color: isDark ? AppColors.darkSurface : AppColors.lightSurface,
+                borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.25),
+                    blurRadius: 20,
+                    offset: const Offset(0, -4),
+                  ),
+                ],
+              ),
+              child: SafeArea(
+                top: false,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(20, 12, 20, 20),
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      // Drag Handle
+                      Center(
+                        child: Container(
+                          width: 44,
+                          height: 5,
+                          decoration: BoxDecoration(
+                            color: isDark ? Colors.white24 : Colors.black12,
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Header
+                      Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(10),
+                            decoration: BoxDecoration(
+                              color: AppColors.primary.withValues(alpha: 0.12),
+                              borderRadius: BorderRadius.circular(14),
+                            ),
+                            child: const Icon(Icons.tune_rounded, color: AppColors.primary, size: 22),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text(
+                                  'Adjust & Manage Groups',
+                                  style: theme.textTheme.titleLarge?.copyWith(
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: -0.4,
+                                  ),
+                                ),
+                                Text(
+                                  'Check groups to delete or rename them',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                          IconButton(
+                            icon: const Icon(Icons.close_rounded),
+                            onPressed: () => Navigator.pop(sheetContext),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Select All / Deselect Toolbar
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+                        decoration: BoxDecoration(
+                          color: isDark ? AppColors.darkSurfaceRaised : const Color(0xFFF1F5F9),
+                          borderRadius: BorderRadius.circular(14),
+                          border: Border.all(
+                            color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
+                          ),
+                        ),
+                        child: Row(
+                          children: [
+                            Checkbox(
+                              value: allSelected,
+                              activeColor: AppColors.primary,
+                              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
+                              onChanged: (bool? value) {
+                                setSheetState(() {
+                                  if (value == true) {
+                                    selectedForDeletion.addAll(groupNames);
+                                  } else {
+                                    selectedForDeletion.clear();
+                                  }
+                                });
+                              },
+                            ),
+                            Text(
+                              allSelected ? 'Deselect All' : 'Select All (${groupNames.length})',
+                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                            ),
+                            const Spacer(),
+                            if (selectedForDeletion.isNotEmpty)
+                              Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                                decoration: BoxDecoration(
+                                  color: AppColors.roseError.withValues(alpha: 0.15),
+                                  borderRadius: BorderRadius.circular(8),
+                                ),
+                                child: Text(
+                                  '${selectedForDeletion.length} checked',
+                                  style: const TextStyle(
+                                    color: AppColors.roseError,
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 12,
+                                  ),
+                                ),
+                              ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+
+                      // Group list with checkboxes
+                      Flexible(
+                        child: ListView.separated(
+                          shrinkWrap: true,
+                          itemCount: groupNames.length,
+                          separatorBuilder: (_, __) => const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final gName = groupNames[index];
+                            final acts = allGroups[gName] ?? [];
+                            final isChecked = selectedForDeletion.contains(gName);
+
+                            return Container(
+                              decoration: BoxDecoration(
+                                color: isChecked
+                                    ? (isDark
+                                        ? AppColors.roseError.withValues(alpha: 0.12)
+                                        : const Color(0xFFFFF1F2))
+                                    : (isDark ? AppColors.darkSurfaceRaised : const Color(0xFFF8FAFC)),
+                                borderRadius: BorderRadius.circular(16),
+                                border: Border.all(
+                                  color: isChecked
+                                      ? AppColors.roseError.withValues(alpha: 0.5)
+                                      : (isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                                  width: isChecked ? 1.5 : 1,
+                                ),
+                              ),
+                              child: ListTile(
+                                dense: true,
+                                contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                                leading: Checkbox(
+                                  value: isChecked,
+                                  activeColor: AppColors.roseError,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(5)),
+                                  onChanged: (bool? val) {
+                                    setSheetState(() {
+                                      if (val == true) {
+                                        selectedForDeletion.add(gName);
+                                      } else {
+                                        selectedForDeletion.remove(gName);
+                                      }
+                                    });
+                                  },
+                                ),
+                                title: Text(
+                                  gName,
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 14,
+                                    color: isChecked ? AppColors.roseError : null,
+                                  ),
+                                ),
+                                subtitle: Text(
+                                  '${acts.length} ${acts.length == 1 ? 'activity' : 'activities'}',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                                  ),
+                                ),
+                                trailing: Row(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    IconButton(
+                                      icon: Icon(
+                                        Icons.edit_outlined,
+                                        size: 18,
+                                        color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
+                                      ),
+                                      tooltip: 'Rename "$gName"',
+                                      onPressed: () {
+                                        Navigator.pop(sheetContext);
+                                        _showRenameGroupDialog(context, gName);
+                                      },
+                                    ),
+                                    IconButton(
+                                      icon: const Icon(
+                                        Icons.delete_outline_rounded,
+                                        size: 18,
+                                        color: AppColors.roseError,
+                                      ),
+                                      tooltip: 'Delete "$gName"',
+                                      onPressed: () {
+                                        Navigator.pop(sheetContext);
+                                        _confirmDeleteGroup(context, gName);
+                                      },
+                                    ),
+                                  ],
+                                ),
+                                onTap: () {
+                                  setSheetState(() {
+                                    if (isChecked) {
+                                      selectedForDeletion.remove(gName);
+                                    } else {
+                                      selectedForDeletion.add(gName);
+                                    }
+                                  });
+                                },
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 16),
+
+                      // Action buttons
+                      Row(
+                        children: [
+                          Expanded(
+                            child: OutlinedButton(
+                              onPressed: () => Navigator.pop(sheetContext),
+                              style: OutlinedButton.styleFrom(
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              ),
+                              child: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w700)),
+                            ),
+                          ),
+                          const SizedBox(width: 12),
+                          Expanded(
+                            flex: 2,
+                            child: FilledButton.icon(
+                              onPressed: selectedForDeletion.isEmpty
+                                  ? null
+                                  : () {
+                                      Navigator.pop(sheetContext);
+                                      _confirmDeleteMultipleGroups(context, selectedForDeletion.toList());
+                                    },
+                              icon: const Icon(Icons.delete_sweep_rounded, size: 20),
+                              label: Text(
+                                selectedForDeletion.isEmpty
+                                    ? 'Delete Checked'
+                                    : 'Delete Checked (${selectedForDeletion.length})',
+                                style: const TextStyle(fontWeight: FontWeight.w700),
+                              ),
+                              style: FilledButton.styleFrom(
+                                backgroundColor: AppColors.roseError,
+                                foregroundColor: Colors.white,
+                                disabledBackgroundColor: isDark ? Colors.white10 : Colors.black12,
+                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
+  void _confirmDeleteMultipleGroups(BuildContext context, List<String> groupsToDelete) {
+    if (groupsToDelete.isEmpty) return;
+
+    final messenger = ScaffoldMessenger.of(context);
+    final service = context.read<ActivityService>();
+
+    showDialog(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: Text('Delete ${groupsToDelete.length} ${groupsToDelete.length == 1 ? 'Group' : 'Groups'}?'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Are you sure you want to permanently delete the following ${groupsToDelete.length == 1 ? 'group and all of its activities' : 'groups and all of their activities'}?',
+            ),
+            const SizedBox(height: 12),
+            Container(
+              constraints: const BoxConstraints(maxHeight: 140),
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Theme.of(context).brightness == Brightness.dark
+                    ? AppColors.darkSurfaceRaised
+                    : const Color(0xFFF1F5F9),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: ListView(
+                shrinkWrap: true,
+                children: groupsToDelete
+                    .map(
+                      (g) => Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 2),
+                        child: Row(
+                          children: [
+                            const Icon(Icons.label_outline_rounded, size: 14, color: AppColors.roseError),
+                            const SizedBox(width: 6),
+                            Expanded(
+                              child: Text(
+                                g,
+                                style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Text(
+              'This action cannot be undone.',
+              style: TextStyle(fontSize: 12, color: AppColors.roseError, fontWeight: FontWeight.w600),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            style: FilledButton.styleFrom(
+              backgroundColor: AppColors.roseError,
+              foregroundColor: Colors.white,
+            ),
+            onPressed: () async {
+              Navigator.pop(dialogContext);
+              try {
+                for (final gName in groupsToDelete) {
+                  await service.deleteGroup(gName);
+                }
+                if (mounted && groupsToDelete.contains(_selectedGroup)) {
+                  setState(() {
+                    _selectedGroup = null;
+                  });
+                }
+                messenger.showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Deleted ${groupsToDelete.length} ${groupsToDelete.length == 1 ? 'group' : 'groups'}',
+                    ),
+                  ),
+                );
+              } catch (e) {
+                messenger.showSnackBar(
+                  SnackBar(
+                    content: Text('Failed to delete groups: $e'),
+                    backgroundColor: AppColors.roseError,
+                  ),
+                );
+              }
+            },
+            child: Text('Delete (${groupsToDelete.length})'),
+          ),
+        ],
+      ),
+    );
+  }
+
   String _getGreeting() {
     final hour = DateTime.now().hour;
     if (hour < 12) return 'Good morning';
@@ -508,7 +916,7 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
                   const SizedBox(height: 20),
 
                   // ── Group Selector Filter Chips ────────────────────────────
-                  _buildGroupSelector(context, groupNames),
+                  _buildGroupSelector(context, groupNames, allGroups),
                   const SizedBox(height: 20),
 
                   // ── Activities Header ──────────────────────────────────────
@@ -580,14 +988,27 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
                   // ── Other Groups Section ──────────────────────────────────
                   if (otherGroupNames.isNotEmpty) ...[
                     const SizedBox(height: 32),
-                    Text(
-                      'Other Groups',
-                      style: theme.textTheme.titleLarge?.copyWith(
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: -0.4,
-                      ),
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Text(
+                          'Other Groups',
+                          style: theme.textTheme.titleLarge?.copyWith(
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: -0.4,
+                          ),
+                        ),
+                        TextButton.icon(
+                          onPressed: () => _showManageGroupsSheet(context, allGroups),
+                          icon: const Icon(Icons.tune_rounded, size: 16, color: AppColors.primary),
+                          label: const Text(
+                            'Adjust Groups',
+                            style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13, color: AppColors.primary),
+                          ),
+                        ),
+                      ],
                     ),
-                    const SizedBox(height: 14),
+                    const SizedBox(height: 8),
                     NeumorphicCard(
                       padding: EdgeInsets.zero,
                       borderRadius: 20,
@@ -750,7 +1171,13 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
     );
   }
 
-  Widget _buildGroupSelector(BuildContext context, List<String> groupNames) {
+  Widget _buildGroupSelector(
+    BuildContext context,
+    List<String> groupNames,
+    Map<String, List<Activity>> allGroups,
+  ) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+
     return SizedBox(
       height: 40,
       child: ListView(
@@ -772,26 +1199,23 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
               title: name,
               isSelected: isSelected,
               onTap: () => _selectGroup(isSelected ? null : name),
+              onLongPress: () => _showGroupQuickOptions(context, name, allGroups),
             );
           }),
 
           // "+" Add group / activity chip
           Padding(
-            padding: const EdgeInsets.only(left: 4),
+            padding: const EdgeInsets.only(left: 4, right: 6),
             child: InkWell(
               borderRadius: BorderRadius.circular(14),
               onTap: () => _showAdd(context, null),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                 decoration: BoxDecoration(
-                  color: Theme.of(context).brightness == Brightness.dark
-                      ? AppColors.darkSurfaceRaised
-                      : const Color(0xFFF1F5F9),
+                  color: isDark ? AppColors.darkSurfaceRaised : const Color(0xFFF1F5F9),
                   borderRadius: BorderRadius.circular(14),
                   border: Border.all(
-                    color: Theme.of(context).brightness == Brightness.dark
-                        ? AppColors.darkBorder
-                        : AppColors.lightBorder,
+                    color: isDark ? AppColors.darkBorder : AppColors.lightBorder,
                   ),
                 ),
                 child: const Row(
@@ -812,7 +1236,103 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
               ),
             ),
           ),
+
+          // "Adjust" / Manage Groups chip with checking to delete
+          if (groupNames.isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () => _showManageGroupsSheet(context, allGroups),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                  decoration: BoxDecoration(
+                    color: isDark ? AppColors.darkSurfaceRaised : const Color(0xFFF1F5F9),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: AppColors.primary.withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: const Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(Icons.tune_rounded, size: 15, color: AppColors.primary),
+                      SizedBox(width: 5),
+                      Text(
+                        'Adjust',
+                        style: TextStyle(
+                          fontSize: 13,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.primary,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ),
         ],
+      ),
+    );
+  }
+
+  void _showGroupQuickOptions(
+    BuildContext context,
+    String groupName,
+    Map<String, List<Activity>> allGroups,
+  ) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetCtx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey.withValues(alpha: 0.4),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                'Group: "$groupName"',
+                style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 16),
+              ),
+              const Divider(height: 20),
+              ListTile(
+                leading: const Icon(Icons.edit_outlined, color: AppColors.primary),
+                title: const Text('Rename Group', style: TextStyle(fontWeight: FontWeight.w600)),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _showRenameGroupDialog(context, groupName);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.delete_outline_rounded, color: AppColors.roseError),
+                title: const Text('Delete Group', style: TextStyle(fontWeight: FontWeight.w600, color: AppColors.roseError)),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _confirmDeleteGroup(context, groupName);
+                },
+              ),
+              ListTile(
+                leading: const Icon(Icons.checklist_rounded, color: AppColors.primary),
+                title: const Text('Adjust All Groups (Multi-select Delete)', style: TextStyle(fontWeight: FontWeight.w600)),
+                onTap: () {
+                  Navigator.pop(sheetCtx);
+                  _showManageGroupsSheet(context, allGroups);
+                },
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -822,6 +1342,7 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
     required String title,
     required bool isSelected,
     required VoidCallback onTap,
+    VoidCallback? onLongPress,
   }) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
 
@@ -830,6 +1351,7 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
       child: InkWell(
         borderRadius: BorderRadius.circular(14),
         onTap: onTap,
+        onLongPress: onLongPress,
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 180),
           padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),

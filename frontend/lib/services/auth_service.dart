@@ -188,6 +188,35 @@ class AuthService extends ChangeNotifier {
     return token != null;
   }
 
+  /// Retries transient network/socket exceptions automatically
+  Future<T> _retryOnNetworkError<T>(Future<T> Function() operation, {int maxAttempts = 3}) async {
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await operation();
+      } on AuthException {
+        rethrow;
+      } catch (e) {
+        final errStr = e.toString().toLowerCase();
+        final isNetwork = errStr.contains('socketexception') ||
+            errStr.contains('connection reset by peer') ||
+            errStr.contains('clientexception') ||
+            errStr.contains('failed host lookup') ||
+            errStr.contains('errno = 104') ||
+            errStr.contains('connection refused') ||
+            errStr.contains('connection closed') ||
+            errStr.contains('networkerror');
+
+        if (isNetwork && attempt < maxAttempts) {
+          debugPrint('Network transient error on attempt $attempt/$maxAttempts. Retrying in ${attempt * 500}ms...');
+          await Future.delayed(Duration(milliseconds: attempt * 500));
+          continue;
+        }
+        rethrow;
+      }
+    }
+    throw Exception('Request failed after $maxAttempts attempts.');
+  }
+
   /// Email/Password signup using native Supabase Auth
   Future<Map<String, dynamic>> signup({
     required String name,
@@ -200,14 +229,22 @@ class AuthService extends ChangeNotifier {
 
     try {
       final supabase = Supabase.instance.client;
-      final AuthResponse res = await supabase.auth.signUp(
+      final redirectUrl = kIsWeb
+          ? (dotenv.env['FRONTEND_URL'] ??
+              (Uri.base.hasPort && Uri.base.port != 0
+                  ? '${Uri.base.scheme}://${Uri.base.host}:${Uri.base.port}'
+                  : 'http://localhost:3000'))
+          : 'io.supabase.activitytracker://login-callback';
+
+      final AuthResponse res = await _retryOnNetworkError(() => supabase.auth.signUp(
         email: email,
         password: password,
+        emailRedirectTo: redirectUrl,
         data: {
           'name': name,
           'full_name': name,
         },
-      );
+      ));
 
       final supabaseUser = res.user;
       final session = res.session;
@@ -262,12 +299,52 @@ class AuthService extends ChangeNotifier {
     } catch (e) {
       _isLoading = false;
       String errorMsg = e.toString().replaceAll('Exception: ', '');
-      if (errorMsg.contains('SocketException') || errorMsg.contains('Failed host lookup') || errorMsg.contains('ClientException') || errorMsg.contains('NetworkError')) {
-        errorMsg = 'Network connection error. Please check your internet connection and try again.';
+      final lower = errorMsg.toLowerCase();
+      if (lower.contains('socketexception') ||
+          lower.contains('failed host lookup') ||
+          lower.contains('clientexception') ||
+          lower.contains('connection reset by peer') ||
+          lower.contains('errno = 104') ||
+          lower.contains('connection closed') ||
+          lower.contains('networkerror')) {
+        errorMsg = 'Network connection interrupted. Please try again.';
       }
       _error = errorMsg;
       notifyListeners();
       throw Exception(errorMsg);
+    }
+  }
+
+  /// Resend confirmation email
+  Future<void> resendConfirmationEmail({required String email}) async {
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
+
+    try {
+      final supabase = Supabase.instance.client;
+      final redirectUrl = kIsWeb
+          ? (dotenv.env['FRONTEND_URL'] ?? 'http://localhost:3000')
+          : 'io.supabase.activitytracker://login-callback';
+
+      await _retryOnNetworkError(() => supabase.auth.resend(
+        type: OtpType.signup,
+        email: email,
+        emailRedirectTo: redirectUrl,
+      ));
+
+      _isLoading = false;
+      notifyListeners();
+    } on AuthException catch (e) {
+      _isLoading = false;
+      _error = e.message;
+      notifyListeners();
+      throw Exception(e.message);
+    } catch (e) {
+      _isLoading = false;
+      _error = 'Failed to resend confirmation email. Please try again.';
+      notifyListeners();
+      throw Exception(_error);
     }
   }
 
@@ -311,10 +388,10 @@ class AuthService extends ChangeNotifier {
 
     try {
       final supabase = Supabase.instance.client;
-      final AuthResponse res = await supabase.auth.signInWithPassword(
+      final AuthResponse res = await _retryOnNetworkError(() => supabase.auth.signInWithPassword(
         email: email,
         password: password,
-      );
+      ));
 
       final supabaseUser = res.user;
       final session = res.session;
@@ -364,10 +441,15 @@ class AuthService extends ChangeNotifier {
     } catch (e) {
       _isLoading = false;
       String errorMsg = e.toString().replaceAll('Exception: ', '');
-      if (errorMsg.contains('SocketException') ||
-          errorMsg.contains('Failed host lookup') ||
-          errorMsg.contains('ClientException')) {
-        errorMsg = 'Network connection error. Please check your internet connection.';
+      final lower = errorMsg.toLowerCase();
+      if (lower.contains('socketexception') ||
+          lower.contains('failed host lookup') ||
+          lower.contains('clientexception') ||
+          lower.contains('connection reset by peer') ||
+          lower.contains('errno = 104') ||
+          lower.contains('connection closed') ||
+          lower.contains('networkerror')) {
+        errorMsg = 'Network connection interrupted. Please try again.';
       }
       _error = errorMsg;
       notifyListeners();

@@ -110,7 +110,33 @@ class _LoginScreenState extends State<LoginScreen> {
         await _navigateToHome();
       }
     } catch (e) {
-      _showMessage(e.toString().replaceAll('Exception: ', ''), isError: true);
+      final msg = e.toString().replaceAll('Exception: ', '');
+      if (msg.toLowerCase().contains('not confirmed')) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(msg),
+            backgroundColor: AppColors.amberFlame,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 8),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            action: SnackBarAction(
+              label: 'Resend Link',
+              textColor: Colors.black,
+              onPressed: () async {
+                try {
+                  await authService.resendConfirmationEmail(email: email);
+                  _showMessage('Confirmation email resent! Please check your inbox.');
+                } catch (err) {
+                  _showMessage(err.toString().replaceAll('Exception: ', ''), isError: true);
+                }
+              },
+            ),
+          ),
+        );
+      } else {
+        _showMessage(msg, isError: true);
+      }
     }
   }
 
