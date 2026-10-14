@@ -284,11 +284,12 @@ export async function deleteGroup(req: AuthRequest, res: Response): Promise<void
       return;
     }
 
-    const { groupName } = req.params;
-    if (!groupName) {
+    const rawGroupName = req.params.groupName;
+    if (!rawGroupName) {
       res.status(400).json({ error: 'Group name is required' });
       return;
     }
+    const groupName = decodeURIComponent(rawGroupName).trim();
 
     const db = await getDatabase();
 
@@ -299,7 +300,11 @@ export async function deleteGroup(req: AuthRequest, res: Response): Promise<void
     );
 
     if (!activities || activities.length === 0) {
-      res.status(404).json({ error: 'No active activities found in this group' });
+      // Idempotent: group has no active activities, report success cleanly
+      res.json({
+        message: `Group "${groupName}" deleted successfully`,
+        deleted_count: 0,
+      });
       return;
     }
 
@@ -326,14 +331,15 @@ export async function renameGroup(req: AuthRequest, res: Response): Promise<void
       return;
     }
 
-    const { groupName } = req.params;
+    const rawGroupName = req.params.groupName;
     const { newGroupName } = req.body;
 
-    if (!groupName || !newGroupName || !newGroupName.trim()) {
+    if (!rawGroupName || !newGroupName || !newGroupName.trim()) {
       res.status(400).json({ error: 'Current group name and new group name are required' });
       return;
     }
 
+    const groupName = decodeURIComponent(rawGroupName).trim();
     const trimmedNew = newGroupName.trim();
     const db = await getDatabase();
 

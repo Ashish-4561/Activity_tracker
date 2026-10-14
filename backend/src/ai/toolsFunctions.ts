@@ -20,6 +20,7 @@ export async function aiCreateActivity(
   durationValue = 12,
   durationUnit = 'months',
   startDate?: string,
+  groupName?: string,
 ): Promise<{ success: boolean; activity?: Activity; error?: string }> {
   try {
     if (!name) {
@@ -34,9 +35,9 @@ export async function aiCreateActivity(
     const activityId = generateId();
 
     await db.run(
-      `INSERT INTO activities (id, user_id, name, icon, frequency, start_date, frequency_value, frequency_unit, duration_value, duration_unit, color, description, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [activityId, userId, name.trim(), icon || null, frequency, startDate || getCurrentDate(), frequencyValue, frequencyUnit, durationValue, durationUnit, color || null, description || null, 1]
+      `INSERT INTO activities (id, user_id, name, group_name, icon, frequency, start_date, frequency_value, frequency_unit, duration_value, duration_unit, color, description, is_active)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [activityId, userId, name.trim(), groupName?.trim() || 'General', icon || null, frequency, startDate || getCurrentDate(), frequencyValue, frequencyUnit, durationValue, durationUnit, color || null, description || null, 1]
     );
 
     const activity = await db.get<Activity>(
@@ -56,6 +57,7 @@ export async function aiUpdateActivity(
   activityId: string,
   updates: Partial<{
     name: string;
+    group_name: string;
     icon: string;
     frequency: string;
     color: string;
@@ -81,6 +83,10 @@ export async function aiUpdateActivity(
     if (updates.name !== undefined) {
       updateFields.push('name = ?');
       values.push(updates.name);
+    }
+    if (updates.group_name !== undefined) {
+      updateFields.push('group_name = ?');
+      values.push(updates.group_name.trim() || 'General');
     }
     if (updates.icon !== undefined) {
       updateFields.push('icon = ?');

@@ -1,5 +1,6 @@
 import { Response } from 'express';
 import { getDatabase } from '../config/database';
+import { getSupabaseClient } from '../config/supabase';
 import {
   generateToken,
   hashPassword,
@@ -35,7 +36,7 @@ export async function signup(req: AuthRequest, res: Response): Promise<void> {
     // Check if email already exists
     const existingUser = await db.get('SELECT id FROM users WHERE email = ?', [email]);
     if (existingUser) {
-      res.status(409).json({ error: 'Email already registered' });
+      res.status(409).json({ error: 'An account with this email already exists. Please log in instead.' });
       return;
     }
 
@@ -270,23 +271,79 @@ export async function deleteAccount(req: AuthRequest, res: Response): Promise<vo
 
 export async function googleAuth(req: AuthRequest, res: Response): Promise<void> {
   try {
-    const { email, name, profileImage, googleId } = req.body;
+    const { email, name, profileImage, googleId, idToken, supabaseToken } = req.body;
+    const authHeader = req.headers.authorization;
+    const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
+    const tokenToVerify = supabaseToken || bearerToken;
 
-    if (!email) {
+    let verifiedEmail = email;
+    let verifiedName = name;
+    let verifiedPicture = profileImage;
+    let authUserId: string | null = null;
+
+    const isProduction = process.env.NODE_ENV === 'production';
+    const supabase = getSupabaseClient();
+
+    // 1. Verify Supabase token if provided
+    if (tokenToVerify && supabase) {
+      try {
+        const { data: { user: authUser }, error } = await supabase.auth.getUser(tokenToVerify);
+        if (authUser && !error) {
+          verifiedEmail = authUser.email || verifiedEmail;
+          verifiedName = authUser.user_metadata?.full_name || authUser.user_metadata?.name || verifiedName;
+          verifiedPicture = authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture || verifiedPicture;
+          authUserId = authUser.id;
+        } else if (isProduction && !idToken) {
+          res.status(401).json({ error: 'Invalid or expired Supabase authentication token' });
+          return;
+        }
+      } catch (err) {
+        if (isProduction && !idToken) {
+          res.status(401).json({ error: 'Supabase token verification failed' });
+          return;
+        }
+      }
+    } else if (idToken) {
+      // 2. Verify Google id_token via Google tokeninfo
+      try {
+        const verifyRes = await fetch(`https://oauth2.googleapis.com/tokeninfo?id_token=${encodeURIComponent(idToken)}`);
+        if (verifyRes.ok) {
+          const payload = await verifyRes.json() as any;
+          if (payload.email) {
+            verifiedEmail = payload.email;
+            verifiedName = payload.name || verifiedName;
+            verifiedPicture = payload.picture || verifiedPicture;
+          }
+        } else if (isProduction) {
+          res.status(401).json({ error: 'Invalid Google ID token' });
+          return;
+        }
+      } catch (err) {
+        if (isProduction) {
+          res.status(401).json({ error: 'Failed to verify Google ID token' });
+          return;
+        }
+      }
+    } else if (isProduction && process.env.ALLOW_INSECURE_AUTH !== 'true') {
+      res.status(401).json({ error: 'Authentication token or Google ID token is required for Google sign-in' });
+      return;
+    }
+
+    if (!verifiedEmail) {
       res.status(400).json({ error: 'Email is required for Google authentication' });
       return;
     }
 
     const db = await getDatabase();
-    let user = await db.get<User>('SELECT * FROM users WHERE email = ?', [email]);
+    let user = await db.get<User>('SELECT * FROM users WHERE email = ?', [verifiedEmail]);
 
     if (!user) {
       const userId = generateId();
-      const userName = name || email.split('@')[0] || 'User';
+      const userName = verifiedName || verifiedEmail.split('@')[0] || 'User';
       await db.run(
-        `INSERT INTO users (id, name, email, profile_image, auth_provider, theme, ai_enabled, ai_suggestions_enabled, notifications_enabled)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [userId, userName, email, profileImage || null, 'google', 'light', true, true, true]
+        `INSERT INTO users (id, auth_user_id, name, email, profile_image, auth_provider, theme, ai_enabled, ai_suggestions_enabled, notifications_enabled)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [userId, authUserId || null, userName, verifiedEmail, verifiedPicture || null, 'google', 'light', true, true, true]
       );
 
       const settingsId = generateId();
@@ -297,9 +354,11 @@ export async function googleAuth(req: AuthRequest, res: Response): Promise<void>
       );
 
       user = await db.get<User>('SELECT * FROM users WHERE id = ?', [userId]);
+    } else if (authUserId && !user.auth_user_id) {
+      await db.run('UPDATE users SET auth_user_id = ? WHERE id = ?', [authUserId, user.id]);
     }
 
-    const token = generateToken(user!.id, user!.email || email);
+    const token = generateToken(user!.id, user!.email || verifiedEmail);
 
     res.json({
       message: 'Google authentication successful',
@@ -340,12 +399,17 @@ export async function sendPhoneOtp(req: AuthRequest, res: Response): Promise<voi
       [verificationId, cleanedPhone, otp, expiresAt]
     );
 
-    console.log(`📱 SMS OTP for ${cleanedPhone}: [ ${otp} ] (Valid for 5 mins)`);
+    const isDev = process.env.NODE_ENV !== 'production';
+    const enableDevOtp = process.env.ENABLE_DEV_OTP === 'true';
+
+    if (isDev && enableDevOtp) {
+      console.log(`📱 [DEV ONLY] SMS OTP for ${cleanedPhone}: [ ${otp} ] (Valid for 5 mins)`);
+    }
 
     res.json({
       message: 'Verification code sent successfully',
       phone: cleanedPhone,
-      otp: otp,
+      ...(isDev && enableDevOtp ? { otp } : {}),
     });
   } catch (error: any) {
     console.error('Send phone OTP error:', error);

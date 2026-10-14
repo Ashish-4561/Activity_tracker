@@ -2,7 +2,13 @@ import jwt from 'jsonwebtoken';
 import bcryptjs from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your_super_secret_key';
+const isProduction = process.env.NODE_ENV === 'production';
+const JWT_SECRET = process.env.JWT_SECRET || (isProduction ? '' : 'your_super_secret_key');
+
+if (isProduction && (!JWT_SECRET || JWT_SECRET === 'your_super_secret_key')) {
+  throw new Error('FATAL SECURITY ERROR: JWT_SECRET environment variable must be set to a secure string in production');
+}
+
 const JWT_EXPIRATION = process.env.JWT_EXPIRATION || '7d';
 
 export interface AuthToken {

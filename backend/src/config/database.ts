@@ -1,9 +1,12 @@
-import { Pool, PoolConfig } from 'pg';
+import { Pool, PoolConfig, types } from 'pg';
 import sqlite3 from 'sqlite3';
 import { open, Database as SqliteDatabase } from 'sqlite';
 import path from 'path';
 import fs from 'fs';
 import dotenv from 'dotenv';
+
+// Ensure PostgreSQL DATE columns (type 1082) are parsed as exact YYYY-MM-DD strings
+types.setTypeParser(1082, (val: string) => val);
 
 dotenv.config();
 
@@ -342,7 +345,7 @@ export function parseDatabaseUrl(databaseUrl: string): PoolConfig {
       },
       max: 10,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
+      connectionTimeoutMillis: 25000,
       keepAlive: true,
     };
   } catch {
@@ -353,7 +356,7 @@ export function parseDatabaseUrl(databaseUrl: string): PoolConfig {
       },
       max: 10,
       idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 10000,
+      connectionTimeoutMillis: 25000,
       keepAlive: true,
     };
   }
@@ -367,35 +370,42 @@ export async function initializeDatabase(): Promise<AppDatabase> {
   const databaseUrl = process.env.DATABASE_URL || process.env.SUPABASE_DB_URL;
 
   if (databaseUrl) {
-    try {
-      console.log('🔗 Connecting to Supabase PostgreSQL...');
-      const config = parseDatabaseUrl(databaseUrl);
-
-      pgPool = new Pool(config);
-
-      // Prevent uncaught ECONNRESET on idle clients from crashing Node process
-      pgPool.on('error', (err: any) => {
-        console.warn('ℹ Supabase pool idle client reset (auto-reconnecting):', err.message || err);
-      });
-
-      // Test connection
-      const client = await pgPool.connect();
+    for (let attempt = 1; attempt <= 2; attempt++) {
       try {
-        console.log('✓ Connected to Supabase PostgreSQL successfully');
-        await createPostgresTables(pgPool);
-        console.log('✓ PostgreSQL schema and tables verified');
-      } finally {
-        client.release();
-      }
+        console.log(`🔗 Connecting to Supabase PostgreSQL (attempt ${attempt}/2)...`);
+        const config = parseDatabaseUrl(databaseUrl);
 
-      dbInstance = new PostgresAppDatabase(pgPool);
-      return dbInstance;
-    } catch (pgError: any) {
-      console.warn(`⚠ Supabase connection failed (${pgError.message || pgError}).`);
-      console.log('ℹ Falling back to local SQLite database (./data/activity_tracker.db)...');
-      if (pgPool) {
-        try { await pgPool.end(); } catch (_) {}
-        pgPool = null;
+        pgPool = new Pool(config);
+
+        // Prevent uncaught ECONNRESET on idle clients from crashing Node process
+        pgPool.on('error', (err: any) => {
+          console.warn('ℹ Supabase pool idle client reset (auto-reconnecting):', err.message || err);
+        });
+
+        // Test connection
+        const client = await pgPool.connect();
+        try {
+          console.log('✓ Connected to Supabase PostgreSQL successfully');
+          await createPostgresTables(pgPool);
+          console.log('✓ PostgreSQL schema and tables verified');
+        } finally {
+          client.release();
+        }
+
+        dbInstance = new PostgresAppDatabase(pgPool);
+        return dbInstance;
+      } catch (pgError: any) {
+        if (pgPool) {
+          try { await pgPool.end(); } catch (_) {}
+          pgPool = null;
+        }
+        if (attempt < 2) {
+          console.warn(`⚠ Supabase connection attempt 1 failed (${pgError.message || pgError}). Retrying in 2 seconds...`);
+          await new Promise(res => setTimeout(res, 2000));
+        } else {
+          console.warn(`⚠ Supabase connection failed (${pgError.message || pgError}).`);
+          console.log('ℹ Falling back to local SQLite database (./data/activity_tracker.db)...');
+        }
       }
     }
   }

@@ -4,34 +4,82 @@ import { getCurrentDate } from '../utils/auth';
 import { AuthRequest } from '../middleware/auth';
 import { Activity, ActivityCompletion, ProgressData, StreakData } from '../models/types';
 
-function parseDate(value: unknown, fallback: Date): string {
-  if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  return fallback.toISOString().split('T')[0];
+function formatDateString(val: unknown, fallback: string = new Date().toISOString().split('T')[0]): string {
+  if (!val) return fallback;
+  if (val instanceof Date) {
+    if (isNaN(val.getTime())) return fallback;
+    return val.toISOString().split('T')[0];
+  }
+  if (typeof val === 'string') {
+    const trimmed = val.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    const match = trimmed.match(/^(\d{4}-\d{2}-\d{2})/);
+    if (match) return match[1];
+    const parsed = new Date(trimmed);
+    if (!isNaN(parsed.getTime())) return parsed.toISOString().split('T')[0];
+  }
+  return fallback;
 }
 
-function addDays(date: string, amount: number): string {
-  const value = new Date(`${date}T00:00:00Z`);
-  value.setUTCDate(value.getUTCDate() + amount);
+function isCompletedValue(val: unknown): boolean {
+  return val === true || val === 1 || val === 'true' || val === '1';
+}
+
+function parseDate(value: unknown, fallback: Date): string {
+  return formatDateString(value, fallback.toISOString().split('T')[0]);
+}
+
+function addDays(date: unknown, amount: number): string {
+  const cleanDate = formatDateString(date);
+  const value = new Date(`${cleanDate}T00:00:00Z`);
+  if (isNaN(value.getTime())) return cleanDate;
+  value.setUTCDate(value.getUTCDate() + (Number.isFinite(amount) ? amount : 0));
   return value.toISOString().split('T')[0];
 }
 
-function addInterval(date: string, amount: number, unit: string): string {
-  const value = new Date(`${date}T00:00:00Z`);
-  if (unit === 'months') value.setUTCMonth(value.getUTCMonth() + amount);
-  else value.setUTCDate(value.getUTCDate() + amount * (unit === 'weeks' ? 7 : 1));
+function addInterval(date: unknown, amount: number, unit: string): string {
+  const cleanDate = formatDateString(date);
+  const value = new Date(`${cleanDate}T00:00:00Z`);
+  if (isNaN(value.getTime())) return cleanDate;
+  const safeAmount = Number.isFinite(amount) && amount > 0 ? amount : 1;
+  if (unit === 'months') {
+    value.setUTCMonth(value.getUTCMonth() + safeAmount);
+  } else {
+    value.setUTCDate(value.getUTCDate() + safeAmount * (unit === 'weeks' ? 7 : 1));
+  }
   return value.toISOString().split('T')[0];
 }
 
 function isScheduled(activity: any, date: string): boolean {
-  const start = activity.start_date || activity.created_at?.split(' ')[0] || date;
-  if (date < start) return false;
-  const end = addInterval(start, Number(activity.duration_value || 12), activity.duration_unit || 'months');
-  if (date >= end) return false;
-  const interval = Number(activity.frequency_value || (activity.frequency === 'weekly' ? 1 : 1));
+  if (!activity) return false;
+  const targetDate = formatDateString(date);
+  const rawStart = activity.start_date || activity.created_at;
+  const start = formatDateString(rawStart, targetDate);
+
+  if (targetDate < start) return false;
+
+  // Daily activities are always scheduled
+  if (activity.frequency === 'daily' || (!activity.frequency && !activity.frequency_value)) {
+    return true;
+  }
+
+  const durationVal = Math.max(1, Number(activity.duration_value) || 12);
+  const durationUnit = activity.duration_unit || 'months';
+  const end = addInterval(start, durationVal, durationUnit);
+  if (targetDate >= end) return false;
+
+  const interval = Math.max(1, Number(activity.frequency_value) || 1);
   const unit = activity.frequency_unit || (activity.frequency === 'weekly' ? 'weeks' : 'days');
+
+  if (unit === 'days' && interval === 1) return true;
+
   let occurrence = start;
-  while (occurrence < date) occurrence = addInterval(occurrence, interval, unit);
-  return occurrence === date;
+  let safetyCounter = 0;
+  while (occurrence < targetDate && safetyCounter < 1000) {
+    occurrence = addInterval(occurrence, interval, unit);
+    safetyCounter++;
+  }
+  return occurrence === targetDate;
 }
 
 export async function getRangeProgress(req: AuthRequest, res: Response): Promise<void> {
@@ -82,7 +130,7 @@ export async function getRangeProgress(req: AuthRequest, res: Response): Promise
     let cursor = from;
     while (cursor <= to) {
       const scheduled = activities.filter(activity => isScheduled(activity, cursor));
-      const completed = scheduled.filter(activity => completionMap.get(`${activity.id}:${cursor}`)?.completed === 1).length;
+      const completed = scheduled.filter(activity => isCompletedValue(completionMap.get(`${activity.id}:${cursor}`)?.completed)).length;
       const total = scheduled.length;
       daily.push({
         date: cursor,
@@ -112,11 +160,11 @@ export async function getRangeProgress(req: AuthRequest, res: Response): Promise
     daily.forEach(day => activities.filter(activity => isScheduled(activity, day.date)).forEach(activity => {
       const entry = groupMap.get(activity.group_name)!;
       entry.total += 1;
-      if (completionMap.get(`${activity.id}:${day.date}`)?.completed === 1) entry.completed += 1;
+      if (isCompletedValue(completionMap.get(`${activity.id}:${day.date}`)?.completed)) entry.completed += 1;
     }));
 
     const activityHistory = activities.map(activity => {
-      const activityDaily = daily.map(day => isScheduled(activity, day.date) && completionMap.get(`${activity.id}:${day.date}`)?.completed === 1);
+      const activityDaily = daily.map(day => isScheduled(activity, day.date) && isCompletedValue(completionMap.get(`${activity.id}:${day.date}`)?.completed));
       const scheduledDays = daily.filter(day => isScheduled(activity, day.date)).length;
       const completedDays = activityDaily.filter(Boolean).length;
       return {
@@ -162,7 +210,7 @@ export async function getDailyProgress(req: AuthRequest, res: Response): Promise
     }
 
     const { date } = req.query;
-    const targetDate = (date as string) || getCurrentDate();
+    const targetDate = formatDateString(date, getCurrentDate());
 
     const db = await getDatabase();
 
@@ -191,7 +239,7 @@ export async function getDailyProgress(req: AuthRequest, res: Response): Promise
 
     const completionMap = new Map<string, boolean>();
     completions?.forEach(c => {
-      completionMap.set(c.activity_id, Boolean(c.completed));
+      completionMap.set(c.activity_id, isCompletedValue(c.completed));
     });
 
     // Count completed activities
@@ -234,16 +282,17 @@ export async function getWeeklyProgress(req: AuthRequest, res: Response): Promis
 
     const db = await getDatabase();
 
-    // Get the start of the current week (Monday)
-    const today = new Date();
-    const dayOfWeek = today.getDay();
-    const diff = today.getDate() - dayOfWeek + (dayOfWeek === 0 ? -6 : 1);
-    const mondayDate = new Date(today.setDate(diff));
+    // Get target date (defaults to today) and calculate Monday of that week in UTC
+    const targetDateStr = formatDateString(req.query.date, new Date().toISOString().split('T')[0]);
+    const [year, month, day] = targetDateStr.split('-').map(Number);
+    const targetDate = new Date(Date.UTC(year, month - 1, day));
+    const dayOfWeek = targetDate.getUTCDay(); // 0 is Sunday, 1 is Monday...
+    const diffToMonday = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const mondayDate = new Date(Date.UTC(year, month - 1, day + diffToMonday));
     const weekStart = mondayDate.toISOString().split('T')[0];
 
     // Get end of week (Sunday)
-    const sundayDate = new Date(mondayDate);
-    sundayDate.setDate(mondayDate.getDate() + 6);
+    const sundayDate = new Date(Date.UTC(mondayDate.getUTCFullYear(), mondayDate.getUTCMonth(), mondayDate.getUTCDate() + 6));
     const weekEnd = sundayDate.toISOString().split('T')[0];
 
     // Get activities
@@ -272,7 +321,7 @@ export async function getWeeklyProgress(req: AuthRequest, res: Response): Promis
 
     const completionMap = new Map<string, boolean>();
     completions?.forEach(c => {
-      completionMap.set(`${c.activity_id}:${c.date}`, Boolean(c.completed));
+      completionMap.set(`${c.activity_id}:${c.date}`, isCompletedValue(c.completed));
     });
 
     // Calculate daily progress
@@ -282,8 +331,7 @@ export async function getWeeklyProgress(req: AuthRequest, res: Response): Promis
     let totalExpected = 0;
 
     for (let i = 0; i < 7; i++) {
-      const currentDate = new Date(mondayDate);
-      currentDate.setDate(mondayDate.getDate() + i);
+      const currentDate = new Date(Date.UTC(mondayDate.getUTCFullYear(), mondayDate.getUTCMonth(), mondayDate.getUTCDate() + i));
       const dateStr = currentDate.toISOString().split('T')[0];
 
       let dayCompleted = 0;
@@ -372,7 +420,7 @@ export async function getMonthlyProgress(req: AuthRequest, res: Response): Promi
     // Calculate activity-specific stats
     const activityStats = activities.map(activity => {
       const activityCompletions = completions?.filter(c => c.activity_id === activity.id) || [];
-      const completedDays = activityCompletions.filter(c => Boolean(c.completed)).length;
+      const completedDays = activityCompletions.filter(c => isCompletedValue(c.completed)).length;
       const trackedDays = activityCompletions.length;
 
       return {
@@ -386,7 +434,7 @@ export async function getMonthlyProgress(req: AuthRequest, res: Response): Promi
     });
 
     // Overall stats
-    const totalCompleted = completions?.filter(c => Boolean(c.completed)).length || 0;
+    const totalCompleted = completions?.filter(c => isCompletedValue(c.completed)).length || 0;
     const totalTracked = completions?.length || 0;
     const percentage = totalTracked > 0 ? Math.round((totalCompleted / totalTracked) * 100) : 0;
 
@@ -449,18 +497,19 @@ export async function getStreakData(req: AuthRequest, res: Response): Promise<vo
     let expectedDate = new Date(today);
 
     for (const completion of completions) {
-      const completionDate = new Date(completion.date);
+      const completionDateStr = formatDateString(completion.date);
+      const completionDate = new Date(`${completionDateStr}T00:00:00Z`);
 
-      if (Boolean(completion.completed)) {
+      if (isCompletedValue(completion.completed)) {
         // Check if this is consecutive with the expected date
         if (
-          expectedDate.getFullYear() === completionDate.getFullYear() &&
-          expectedDate.getMonth() === completionDate.getMonth() &&
-          expectedDate.getDate() === completionDate.getDate()
+          expectedDate.getUTCFullYear() === completionDate.getUTCFullYear() &&
+          expectedDate.getUTCMonth() === completionDate.getUTCMonth() &&
+          expectedDate.getUTCDate() === completionDate.getUTCDate()
         ) {
           currentStreak++;
           bestStreak = Math.max(bestStreak, currentStreak);
-          expectedDate.setDate(expectedDate.getDate() - 1);
+          expectedDate.setUTCDate(expectedDate.getUTCDate() - 1);
         } else if (
           expectedDate < completionDate ||
           (expectedDate.getTime() - completionDate.getTime()) > 86400000
@@ -468,20 +517,21 @@ export async function getStreakData(req: AuthRequest, res: Response): Promise<vo
           // Gap found, reset current streak
           currentStreak = 1;
           bestStreak = Math.max(bestStreak, currentStreak);
-          expectedDate.setDate(completionDate.getDate() - 1);
+          expectedDate = new Date(completionDate);
+          expectedDate.setUTCDate(completionDate.getUTCDate() - 1);
         }
       } else {
         expectedDate = new Date(completionDate);
-        expectedDate.setDate(expectedDate.getDate() - 1);
+        expectedDate.setUTCDate(expectedDate.getUTCDate() - 1);
       }
     }
 
-    const lastCompletedCompletion = completions.find(c => Boolean(c.completed));
+    const lastCompletedCompletion = completions.find(c => isCompletedValue(c.completed));
 
     res.json({
       current_streak: currentStreak,
       best_streak: bestStreak,
-      last_completed_date: lastCompletedCompletion?.date || null,
+      last_completed_date: lastCompletedCompletion?.date ? formatDateString(lastCompletedCompletion.date) : null,
     });
   } catch (error: any) {
     console.error('Get streak data error:', error);

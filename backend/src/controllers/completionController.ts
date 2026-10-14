@@ -116,7 +116,7 @@ export async function uncompleteActivity(req: AuthRequest, res: Response): Promi
       await db.run(
         `INSERT INTO activity_completions (id, activity_id, user_id, group_name, date, completed)
          VALUES (?, ?, ?, ?, ?, ?)`,
-        [completionId, activity_id, req.userId, activity.group_name || 'General', targetDate, 0]
+        [completionId, activity_id, req.userId, activity.group_name || 'General', targetDate, false]
       );
     }
 

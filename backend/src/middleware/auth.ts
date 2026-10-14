@@ -68,15 +68,17 @@ export async function authMiddleware(req: AuthRequest, res: Response, next: Next
     let userRecord = await db.get('SELECT * FROM users WHERE auth_user_id = ?', [authUserId]);
 
     // 4. Safe verified email linking (Only if email is verified by Supabase Auth)
-    if (!userRecord && verifiedEmail && isEmailVerified) {
+    if (!userRecord && verifiedEmail) {
       const existingUserByEmail = await db.get('SELECT * FROM users WHERE email = ?', [verifiedEmail]);
-      if (existingUserByEmail) {
-        // Link existing user record to Supabase Auth User ID
-        await db.run('UPDATE users SET auth_user_id = ?, updated_at = NOW() WHERE id = ?', [
-          authUserId,
-          existingUserByEmail.id,
-        ]);
-        userRecord = await db.get('SELECT * FROM users WHERE id = ?', [existingUserByEmail.id]);
+      if (existingUserByEmail && isEmailVerified) {
+        // Link existing user record to Supabase Auth User ID if not conflicting
+        if (!existingUserByEmail.auth_user_id || existingUserByEmail.auth_user_id === authUserId) {
+          await db.run('UPDATE users SET auth_user_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?', [
+            authUserId,
+            existingUserByEmail.id,
+          ]);
+          userRecord = await db.get('SELECT * FROM users WHERE id = ?', [existingUserByEmail.id]);
+        }
       }
     }
 

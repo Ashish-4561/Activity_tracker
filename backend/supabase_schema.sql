@@ -101,3 +101,76 @@ CREATE INDEX IF NOT EXISTS idx_activity_completions_date ON activity_completions
 CREATE INDEX IF NOT EXISTS idx_activity_completions_user_date ON activity_completions(user_id, date);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_user_id ON chat_messages(user_id);
 CREATE INDEX IF NOT EXISTS idx_chat_messages_created ON chat_messages(user_id, created_at DESC);
+
+-- ==========================================================
+-- Row Level Security (RLS) Policies
+-- ==========================================================
+ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+ALTER TABLE activities ENABLE ROW LEVEL SECURITY;
+ALTER TABLE activity_completions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE user_settings ENABLE ROW LEVEL SECURITY;
+
+-- Drop existing policies if re-running
+DROP POLICY IF EXISTS "Users can view own profile" ON users;
+DROP POLICY IF EXISTS "Users can update own profile" ON users;
+DROP POLICY IF EXISTS "Users can view own activities" ON activities;
+DROP POLICY IF EXISTS "Users can insert own activities" ON activities;
+DROP POLICY IF EXISTS "Users can update own activities" ON activities;
+DROP POLICY IF EXISTS "Users can delete own activities" ON activities;
+DROP POLICY IF EXISTS "Users can view own completions" ON activity_completions;
+DROP POLICY IF EXISTS "Users can insert own completions" ON activity_completions;
+DROP POLICY IF EXISTS "Users can update own completions" ON activity_completions;
+DROP POLICY IF EXISTS "Users can delete own completions" ON activity_completions;
+DROP POLICY IF EXISTS "Users can view own chat messages" ON chat_messages;
+DROP POLICY IF EXISTS "Users can insert own chat messages" ON chat_messages;
+DROP POLICY IF EXISTS "Users can view own settings" ON user_settings;
+DROP POLICY IF EXISTS "Users can update own settings" ON user_settings;
+
+-- Users: users can view and update their own record
+CREATE POLICY "Users can view own profile" ON users
+    FOR SELECT USING (auth.uid() = auth_user_id OR auth.uid()::text = id);
+
+CREATE POLICY "Users can update own profile" ON users
+    FOR UPDATE USING (auth.uid() = auth_user_id OR auth.uid()::text = id);
+
+-- Activities: users can only manage their own activities
+CREATE POLICY "Users can view own activities" ON activities
+    FOR SELECT USING (auth.uid()::text = user_id OR auth.uid() IN (SELECT auth_user_id FROM users WHERE id = activities.user_id));
+
+CREATE POLICY "Users can insert own activities" ON activities
+    FOR INSERT WITH CHECK (auth.uid()::text = user_id OR auth.uid() IN (SELECT auth_user_id FROM users WHERE id = activities.user_id));
+
+CREATE POLICY "Users can update own activities" ON activities
+    FOR UPDATE USING (auth.uid()::text = user_id OR auth.uid() IN (SELECT auth_user_id FROM users WHERE id = activities.user_id));
+
+CREATE POLICY "Users can delete own activities" ON activities
+    FOR DELETE USING (auth.uid()::text = user_id OR auth.uid() IN (SELECT auth_user_id FROM users WHERE id = activities.user_id));
+
+-- Activity Completions: users can only manage their own completions
+CREATE POLICY "Users can view own completions" ON activity_completions
+    FOR SELECT USING (auth.uid()::text = user_id OR auth.uid() IN (SELECT auth_user_id FROM users WHERE id = activity_completions.user_id));
+
+CREATE POLICY "Users can insert own completions" ON activity_completions
+    FOR INSERT WITH CHECK (auth.uid()::text = user_id OR auth.uid() IN (SELECT auth_user_id FROM users WHERE id = activity_completions.user_id));
+
+CREATE POLICY "Users can update own completions" ON activity_completions
+    FOR UPDATE USING (auth.uid()::text = user_id OR auth.uid() IN (SELECT auth_user_id FROM users WHERE id = activity_completions.user_id));
+
+CREATE POLICY "Users can delete own completions" ON activity_completions
+    FOR DELETE USING (auth.uid()::text = user_id OR auth.uid() IN (SELECT auth_user_id FROM users WHERE id = activity_completions.user_id));
+
+-- Chat Messages: users can only manage their own messages
+CREATE POLICY "Users can view own chat messages" ON chat_messages
+    FOR SELECT USING (auth.uid()::text = user_id OR auth.uid() IN (SELECT auth_user_id FROM users WHERE id = chat_messages.user_id));
+
+CREATE POLICY "Users can insert own chat messages" ON chat_messages
+    FOR INSERT WITH CHECK (auth.uid()::text = user_id OR auth.uid() IN (SELECT auth_user_id FROM users WHERE id = chat_messages.user_id));
+
+-- User Settings: users can manage their own settings
+CREATE POLICY "Users can view own settings" ON user_settings
+    FOR SELECT USING (auth.uid()::text = user_id OR auth.uid() IN (SELECT auth_user_id FROM users WHERE id = user_settings.user_id));
+
+CREATE POLICY "Users can update own settings" ON user_settings
+    FOR UPDATE USING (auth.uid()::text = user_id OR auth.uid() IN (SELECT auth_user_id FROM users WHERE id = user_settings.user_id));
+

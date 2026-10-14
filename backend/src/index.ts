@@ -10,18 +10,56 @@ import progressRoutes from './routes/progress';
 import chatRoutes from './routes/chat';
 import { authMiddleware } from './middleware/auth';
 
+// Prevent transient socket resets (e.g. Supabase pooler idle timeout) from crashing process
+process.on('uncaughtException', (err: any) => {
+  if (err?.code === 'ECONNRESET' || err?.message?.includes('ECONNRESET')) {
+    console.warn('ℹ Handled transient socket reset (ECONNRESET):', err.message || err);
+    return;
+  }
+  console.error('Uncaught Exception:', err);
+});
+
+process.on('unhandledRejection', (reason: any) => {
+  console.warn('ℹ Handled unhandled promise rejection:', reason);
+});
+
 // Load environment variables
 dotenv.config();
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Allowed CORS origins
+const allowedOrigins = process.env.CORS_ALLOWED_ORIGINS
+  ? process.env.CORS_ALLOWED_ORIGINS.split(',').map((s) => s.trim())
+  : [];
+if (process.env.FRONTEND_URL) {
+  allowedOrigins.push(process.env.FRONTEND_URL.trim());
+}
+
 // Middleware
 app.use(express.json());
-app.use(cors({
-  origin: true,
-  credentials: true,
-}));
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow non-browser requests (mobile apps, Postman, curl) with no origin header
+      if (!origin) return callback(null, true);
+
+      // In development or test, allow local development origins
+      if (process.env.NODE_ENV !== 'production') {
+        return callback(null, true);
+      }
+
+      // In production, check against configured whitelist
+      if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
+        return callback(null, true);
+      }
+
+      return callback(new Error(`CORS policy does not allow access from origin ${origin}`));
+    },
+    credentials: true,
+  })
+);
 
 // Initialize database on startup
 (async () => {
@@ -62,7 +100,9 @@ app.use((err: any, req: express.Request, res: express.Response, next: express.Ne
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/api/health`);
+const HOST = process.env.HOST || '0.0.0.0';
+
+app.listen(Number(PORT), HOST, () => {
+  console.log(`🚀 Server running at http://${HOST}:${PORT}`);
+  console.log(`📊 Health check: http://${HOST}:${PORT}/api/health`);
 });

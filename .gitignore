@@ -24,6 +24,7 @@ node_modules/
 .gradle/
 *.apk
 activity_tracker.apk
+META-INF/
 
 # Database
 *.db
