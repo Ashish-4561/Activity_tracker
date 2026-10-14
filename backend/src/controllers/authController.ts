@@ -36,7 +36,10 @@ export async function signup(req: AuthRequest, res: Response): Promise<void> {
     // Check if email already exists
     const existingUser = await db.get('SELECT id FROM users WHERE email = ?', [email]);
     if (existingUser) {
-      res.status(409).json({ error: 'An account with this email already exists. Please log in instead.' });
+      res.status(409).json({
+        error: 'Account already exists. Please log in instead.',
+        code: 'ACCOUNT_EXISTS',
+      });
       return;
     }
 

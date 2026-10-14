@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../config/api_config.dart';
 import '../../services/auth_service.dart';
 import '../../services/activity_service.dart';
 import '../../services/theme_service.dart';
@@ -218,72 +217,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
               }
             },
             child: const Text('Delete'),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _showServerConfigDialog() {
-    final currentUrl = ApiConfig.getBaseUrl();
-    final controller = TextEditingController(text: currentUrl);
-
-    showDialog(
-      context: context,
-      builder: (dialogCtx) => AlertDialog(
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-        title: const Row(
-          children: [
-            Icon(Icons.dns_rounded, size: 22),
-            SizedBox(width: 8),
-            Text('Server Connection', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-          ],
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Text(
-              'Backend API URL for activities, sync, and profile. If testing over Wi-Fi and the host IP changed, update it here:',
-              style: TextStyle(fontSize: 13),
-            ),
-            const SizedBox(height: 14),
-            TextField(
-              controller: controller,
-              decoration: InputDecoration(
-                labelText: 'API Base URL',
-                hintText: 'http://172.22.239.207:5000/api',
-                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                isDense: true,
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () async {
-              await ApiConfig.setCustomApiUrl(null);
-              if (dialogCtx.mounted) Navigator.pop(dialogCtx);
-              _showMessage('Reset to default URL: ${ApiConfig.getBaseUrl()}');
-              setState(() {});
-            },
-            child: const Text('Reset'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogCtx),
-            child: const Text('Cancel'),
-          ),
-          FilledButton(
-            onPressed: () async {
-              final newUrl = controller.text.trim();
-              if (newUrl.isNotEmpty) {
-                await ApiConfig.setCustomApiUrl(newUrl);
-                if (dialogCtx.mounted) Navigator.pop(dialogCtx);
-                _showMessage('Server URL updated to ${ApiConfig.getBaseUrl()}');
-                setState(() {});
-              }
-            },
-            child: const Text('Save'),
           ),
         ],
       ),
@@ -546,21 +479,6 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   onChanged: user != null
                       ? (val) => context.read<AuthService>().updateProfile(notificationsEnabled: val)
                       : (val) => AuthPromptDialog.show(context),
-                ),
-                Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder, height: 1, indent: 56),
-                ListTile(
-                  leading: Container(
-                    padding: const EdgeInsets.all(8),
-                    decoration: BoxDecoration(
-                      color: AppColors.primary.withValues(alpha: 0.15),
-                      borderRadius: BorderRadius.circular(10),
-                    ),
-                    child: const Icon(Icons.dns_rounded, color: AppColors.primary, size: 20),
-                  ),
-                  title: const Text('Server Connection', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
-                  subtitle: Text(ApiConfig.getBaseUrl(), style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary), overflow: TextOverflow.ellipsis),
-                  trailing: const Icon(Icons.chevron_right_rounded, size: 20),
-                  onTap: _showServerConfigDialog,
                 ),
               ],
             ),

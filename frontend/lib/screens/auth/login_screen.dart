@@ -1,7 +1,6 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../config/api_config.dart';
 import '../../services/auth_service.dart';
 import '../../services/theme_service.dart';
 import '../../widgets/daytrack_logo.dart';
@@ -11,7 +10,9 @@ import '../app_shell.dart';
 import 'signup_screen.dart';
 
 class LoginScreen extends StatefulWidget {
-  const LoginScreen({super.key});
+  final String? initialEmail;
+
+  const LoginScreen({super.key, this.initialEmail});
 
   @override
   State<LoginScreen> createState() => _LoginScreenState();
@@ -37,6 +38,9 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
+    if (widget.initialEmail != null && widget.initialEmail!.trim().isNotEmpty) {
+      _emailController.text = widget.initialEmail!.trim();
+    }
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
@@ -122,8 +126,24 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
     final email = _emailController.text.trim();
     final password = _passwordController.text;
 
-    if (email.isEmpty || password.isEmpty) {
-      _showMessage('Please enter your email and password', isError: true);
+    if (email.isEmpty) {
+      _showMessage('Please enter your email address', isError: true);
+      return;
+    }
+
+    final emailRegex = RegExp(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$');
+    if (!emailRegex.hasMatch(email)) {
+      _showMessage('Please enter a valid email address (e.g. name@example.com)', isError: true);
+      return;
+    }
+
+    if (password.isEmpty) {
+      _showMessage('Please enter your password', isError: true);
+      return;
+    }
+
+    if (password.length < 6) {
+      _showMessage('Password must be at least 6 characters', isError: true);
       return;
     }
 
@@ -235,74 +255,6 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
     }
   }
 
-  Future<void> _showServerConfigDialog() async {
-    final currentUrl = ApiConfig.getBaseUrl();
-    final controller = TextEditingController(text: currentUrl);
-
-    await showDialog(
-      context: context,
-      builder: (dialogCtx) {
-        return AlertDialog(
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-          title: const Row(
-            children: [
-              Icon(Icons.dns_rounded, size: 22),
-              SizedBox(width: 8),
-              Text('Server Connection', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text(
-                'Configure backend API URL. If testing over Wi-Fi and your laptop IP changed, update it here:',
-                style: TextStyle(fontSize: 13),
-              ),
-              const SizedBox(height: 14),
-              TextField(
-                controller: controller,
-                decoration: InputDecoration(
-                  labelText: 'API Base URL',
-                  hintText: 'http://172.22.239.207:5000/api',
-                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
-                  isDense: true,
-                ),
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: () async {
-                await ApiConfig.setCustomApiUrl(null);
-                if (dialogCtx.mounted) Navigator.pop(dialogCtx);
-                _showMessage('Reset to default URL: ${ApiConfig.getBaseUrl()}');
-                setState(() {});
-              },
-              child: const Text('Reset'),
-            ),
-            TextButton(
-              onPressed: () => Navigator.pop(dialogCtx),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                final newUrl = controller.text.trim();
-                if (newUrl.isNotEmpty) {
-                  await ApiConfig.setCustomApiUrl(newUrl);
-                  if (dialogCtx.mounted) Navigator.pop(dialogCtx);
-                  _showMessage('Server URL updated to ${ApiConfig.getBaseUrl()}');
-                  setState(() {});
-                }
-              },
-              child: const Text('Save'),
-            ),
-          ],
-        );
-      },
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -343,27 +295,17 @@ class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
                           ),
                         ],
                       ),
-                      Row(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          IconButton(
-                            icon: const Icon(Icons.dns_rounded, size: 20),
-                            tooltip: 'Server Connection',
-                            onPressed: _showServerConfigDialog,
-                          ),
-                          if (!Navigator.canPop(context))
-                            TextButton.icon(
-                              onPressed: () {
-                                Navigator.of(context).pushAndRemoveUntil(
-                                  MaterialPageRoute(builder: (_) => const AppShell()),
-                                  (_) => false,
-                                );
-                              },
-                              icon: const Icon(Icons.arrow_forward_rounded, size: 16),
-                              label: const Text('Guest Mode', style: TextStyle(fontWeight: FontWeight.w700)),
-                            ),
-                        ],
-                      ),
+                      if (!Navigator.canPop(context))
+                        TextButton.icon(
+                          onPressed: () {
+                            Navigator.of(context).pushAndRemoveUntil(
+                              MaterialPageRoute(builder: (_) => const AppShell()),
+                              (_) => false,
+                            );
+                          },
+                          icon: const Icon(Icons.arrow_forward_rounded, size: 16),
+                          label: const Text('Guest Mode', style: TextStyle(fontWeight: FontWeight.w700)),
+                        ),
                     ],
                   ),
                   const SizedBox(height: 32),

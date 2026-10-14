@@ -351,7 +351,7 @@ class AuthService extends ChangeNotifier {
       // When email confirmations are enabled and an account with this email already exists,
       // Supabase returns a user object where identities is an empty list and session is null.
       if (supabaseUser.identities != null && supabaseUser.identities!.isEmpty) {
-        throw const AuthException('An account with this email already exists. Please log in instead.');
+        throw const AuthException('Account already exists. Please log in instead.');
       }
 
       final bool requiresConfirmation = session == null;
@@ -391,8 +391,9 @@ class AuthService extends ChangeNotifier {
           msgLower.contains('already exists') ||
           msgLower.contains('already in use') ||
           msgLower.contains('duplicate') ||
+          msgLower.contains('account_exists') ||
           e.statusCode == '422') {
-        friendlyMessage = 'An account with this email already exists. Please log in instead.';
+        friendlyMessage = 'Account already exists. Please log in instead.';
       } else if (msgLower.contains('password') && (msgLower.contains('short') || msgLower.contains('characters') || msgLower.contains('weak'))) {
         friendlyMessage = 'Password must be at least 6 characters long.';
       } else if (msgLower.contains('invalid') && msgLower.contains('email')) {

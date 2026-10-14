@@ -105,6 +105,63 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 
+  void _showAccountExistsDialog(String email) {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+          icon: Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: AppColors.roseError.withValues(alpha: 0.12),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(
+              Icons.account_circle_outlined,
+              size: 40,
+              color: AppColors.roseError,
+            ),
+          ),
+          title: const Text(
+            'Account Already Exists',
+            style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+            textAlign: TextAlign.center,
+          ),
+          content: const Text(
+            'Account already exists. Please log in instead.',
+            style: TextStyle(fontSize: 14),
+            textAlign: TextAlign.center,
+          ),
+          actionsAlignment: MainAxisAlignment.center,
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.pop(dialogCtx);
+                Navigator.of(context).pushReplacement(
+                  MaterialPageRoute(
+                    builder: (_) => LoginScreen(initialEmail: email),
+                  ),
+                );
+              },
+              icon: const Icon(Icons.login_rounded, size: 18),
+              label: const Text('Log In'),
+              style: FilledButton.styleFrom(
+                backgroundColor: AppColors.primary,
+                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+              ),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   Future<void> _handleEmailSignup() async {
     final name = _nameController.text.trim();
     final email = _emailController.text.trim();
@@ -115,12 +172,21 @@ class _SignupScreenState extends State<SignupScreen> {
       _showMessage('Please enter your full name', isError: true);
       return;
     }
-    if (email.isEmpty || !email.contains('@')) {
-      _showMessage('Please enter a valid email address', isError: true);
+    if (name.length < 2) {
+      _showMessage('Name must be at least 2 characters', isError: true);
+      return;
+    }
+    final emailRegex = RegExp(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$');
+    if (email.isEmpty || !emailRegex.hasMatch(email)) {
+      _showMessage('Please enter a valid email address (e.g. name@example.com)', isError: true);
+      return;
+    }
+    if (password.isEmpty) {
+      _showMessage('Please enter a password', isError: true);
       return;
     }
     if (password.length < 6) {
-      _showMessage('Password must be at least 6 characters', isError: true);
+      _showMessage('Password must be at least 6 characters long', isError: true);
       return;
     }
     if (password != confirmPassword) {
@@ -147,7 +213,7 @@ class _SignupScreenState extends State<SignupScreen> {
           await Future.delayed(const Duration(milliseconds: 1800));
           if (mounted) {
             Navigator.of(context).pushReplacement(
-              MaterialPageRoute(builder: (_) => const LoginScreen()),
+              MaterialPageRoute(builder: (_) => LoginScreen(initialEmail: email)),
             );
           }
         } else {
@@ -155,22 +221,29 @@ class _SignupScreenState extends State<SignupScreen> {
         }
       }
     } catch (e) {
-      final msg = e.toString().replaceAll('Exception: ', '');
-      if (msg.contains('already exists')) {
+      final msg = e.toString().replaceAll('Exception: ', '').trim();
+      final isDuplicate = msg.toLowerCase().contains('already exists') ||
+          msg.toLowerCase().contains('already registered') ||
+          msg.toLowerCase().contains('already in use') ||
+          msg.toLowerCase().contains('duplicate') ||
+          msg.contains('ACCOUNT_EXISTS');
+
+      if (isDuplicate) {
         if (!mounted) return;
+        _showAccountExistsDialog(email);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text(msg),
+            content: const Text('Account already exists. Please log in instead.'),
             backgroundColor: AppColors.roseError,
             behavior: SnackBarBehavior.floating,
-            duration: const Duration(seconds: 8),
+            duration: const Duration(seconds: 10),
             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
             action: SnackBarAction(
               label: 'Log In',
               textColor: Colors.white,
               onPressed: () {
                 Navigator.of(context).pushReplacement(
-                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  MaterialPageRoute(builder: (_) => LoginScreen(initialEmail: email)),
                 );
               },
             ),
