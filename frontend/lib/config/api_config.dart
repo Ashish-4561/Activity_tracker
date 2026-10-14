@@ -98,6 +98,19 @@ class ApiConfig {
     String url = _normalizeUrl(rawUrl);
 
     if (kIsWeb) {
+      final uri = Uri.tryParse(url);
+      if (uri != null) {
+        final host = uri.host.toLowerCase();
+        // If running Flutter Web locally, map emulator or private LAN IPs to localhost
+        // to avoid Wi-Fi DHCP timeouts and cross-network latency. Cloud URLs remain untouched.
+        if (host == '10.0.2.2' ||
+            host == '127.0.0.1' ||
+            host.startsWith('192.168.') ||
+            host.startsWith('172.') ||
+            host.startsWith('10.')) {
+          return uri.replace(host: 'localhost').toString();
+        }
+      }
       return url;
     }
 

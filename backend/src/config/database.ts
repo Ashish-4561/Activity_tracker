@@ -234,15 +234,20 @@ async function createPostgresTables(pool: Pool): Promise<void> {
   `);
 
   // Run dynamic schema migrations on users table if needed
-  try {
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_user_id TEXT;`);
-    await pool.query(`CREATE INDEX IF NOT EXISTS idx_users_auth_user_id ON users(auth_user_id);`);
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(30) UNIQUE;`);
-    await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) DEFAULT 'email';`);
-    await pool.query(`ALTER TABLE users ALTER COLUMN email DROP NOT NULL;`);
-    await pool.query(`ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`);
-  } catch (_) {
-    // Ignore migration warnings if already applied
+  const alterQueries = [
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_user_id TEXT;`,
+    `CREATE INDEX IF NOT EXISTS idx_users_auth_user_id ON users(auth_user_id);`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS phone VARCHAR(30) UNIQUE;`,
+    `ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) DEFAULT 'email';`,
+    `ALTER TABLE users ALTER COLUMN email DROP NOT NULL;`,
+    `ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`,
+  ];
+  for (const query of alterQueries) {
+    try {
+      await pool.query(query);
+    } catch (_) {
+      // Ignore migration errors if already applied or constrained
+    }
   }
 }
 
@@ -332,34 +337,16 @@ async function createSqliteTables(db: SqliteDatabase): Promise<void> {
 }
 
 export function parseDatabaseUrl(databaseUrl: string): PoolConfig {
-  try {
-    const parsed = new URL(databaseUrl);
-    return {
-      user: decodeURIComponent(parsed.username),
-      password: decodeURIComponent(parsed.password),
-      host: parsed.hostname,
-      port: parsed.port ? parseInt(parsed.port, 10) : 5432,
-      database: parsed.pathname ? parsed.pathname.replace(/^\//, '') : 'postgres',
-      ssl: {
-        rejectUnauthorized: false,
-      },
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 25000,
-      keepAlive: true,
-    };
-  } catch {
-    return {
-      connectionString: databaseUrl,
-      ssl: {
-        rejectUnauthorized: false,
-      },
-      max: 10,
-      idleTimeoutMillis: 30000,
-      connectionTimeoutMillis: 25000,
-      keepAlive: true,
-    };
-  }
+  return {
+    connectionString: databaseUrl,
+    ssl: {
+      rejectUnauthorized: false,
+    },
+    max: 10,
+    idleTimeoutMillis: 30000,
+    connectionTimeoutMillis: 25000,
+    keepAlive: true,
+  };
 }
 
 export async function initializeDatabase(): Promise<AppDatabase> {
