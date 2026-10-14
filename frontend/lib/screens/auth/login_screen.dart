@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../config/api_config.dart';
 import '../../services/auth_service.dart';
 import '../../services/theme_service.dart';
 import '../../widgets/daytrack_logo.dart';
@@ -16,7 +17,7 @@ class LoginScreen extends StatefulWidget {
   State<LoginScreen> createState() => _LoginScreenState();
 }
 
-class _LoginScreenState extends State<LoginScreen> {
+class _LoginScreenState extends State<LoginScreen> with WidgetsBindingObserver {
   int _authMethodIndex = 0; // 0: Email, 1: Phone
 
   // Email form controllers
@@ -31,10 +32,12 @@ class _LoginScreenState extends State<LoginScreen> {
   int _resendCountdown = 0;
   Timer? _countdownTimer;
   bool _hasNavigated = false;
+  bool _isGoogleSigningIn = false;
 
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
       final auth = context.read<AuthService>();
@@ -44,6 +47,23 @@ class _LoginScreenState extends State<LoginScreen> {
         auth.addListener(_onAuthStatusChanged);
       }
     });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      final auth = context.read<AuthService>();
+      if (auth.isLoggedIn && !_hasNavigated && mounted) {
+        _navigateToHome();
+      } else if (_isGoogleSigningIn && mounted) {
+        // Returned from browser; give Supabase onAuthStateChange a moment to process callback
+        Future.delayed(const Duration(milliseconds: 1500), () {
+          if (mounted && !context.read<AuthService>().isLoggedIn) {
+            setState(() => _isGoogleSigningIn = false);
+          }
+        });
+      }
+    }
   }
 
   void _onAuthStatusChanged() {
@@ -59,7 +79,11 @@ class _LoginScreenState extends State<LoginScreen> {
     _hasNavigated = true;
     final userName = context.read<AuthService>().currentUser?.name ?? 'User';
     _showMessage('Successfully logged in! Welcome, $userName.', isError: false);
-    await GuestMigrationDialog.showIfGuestHasData(context);
+    try {
+      await GuestMigrationDialog.showIfGuestHasData(context);
+    } catch (e) {
+      debugPrint('Guest migration skipped: $e');
+    }
     if (mounted) {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const AppShell()),
@@ -70,6 +94,7 @@ class _LoginScreenState extends State<LoginScreen> {
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     try {
       context.read<AuthService>().removeListener(_onAuthStatusChanged);
     } catch (_) {}
@@ -194,15 +219,88 @@ class _LoginScreenState extends State<LoginScreen> {
 
   Future<void> _handleGoogleSignIn() async {
     final authService = context.read<AuthService>();
+    setState(() => _isGoogleSigningIn = true);
 
     try {
       await authService.signInWithGoogleOAuth();
+      // On web or immediate session completion:
       if (mounted && authService.isLoggedIn) {
         await _navigateToHome();
       }
     } catch (e) {
-      _showMessage(e.toString().replaceAll('Exception: ', ''), isError: true);
+      if (mounted) {
+        setState(() => _isGoogleSigningIn = false);
+        _showMessage(e.toString().replaceAll('Exception: ', ''), isError: true);
+      }
     }
+  }
+
+  Future<void> _showServerConfigDialog() async {
+    final currentUrl = ApiConfig.getBaseUrl();
+    final controller = TextEditingController(text: currentUrl);
+
+    await showDialog(
+      context: context,
+      builder: (dialogCtx) {
+        return AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Row(
+            children: [
+              Icon(Icons.dns_rounded, size: 22),
+              SizedBox(width: 8),
+              Text('Server Connection', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Configure backend API URL. If testing over Wi-Fi and your laptop IP changed, update it here:',
+                style: TextStyle(fontSize: 13),
+              ),
+              const SizedBox(height: 14),
+              TextField(
+                controller: controller,
+                decoration: InputDecoration(
+                  labelText: 'API Base URL',
+                  hintText: 'http://172.22.127.126:5000/api',
+                  border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                  isDense: true,
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () async {
+                await ApiConfig.setCustomApiUrl(null);
+                if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                _showMessage('Reset to default URL: ${ApiConfig.getBaseUrl()}');
+                setState(() {});
+              },
+              child: const Text('Reset'),
+            ),
+            TextButton(
+              onPressed: () => Navigator.pop(dialogCtx),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                final newUrl = controller.text.trim();
+                if (newUrl.isNotEmpty) {
+                  await ApiConfig.setCustomApiUrl(newUrl);
+                  if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                  _showMessage('Server URL updated to ${ApiConfig.getBaseUrl()}');
+                  setState(() {});
+                }
+              },
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
   }
 
   @override
@@ -225,21 +323,46 @@ class _LoginScreenState extends State<LoginScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const DayTrackLogo(
-                        variant: DayTrackLogoVariant.horizontal,
-                        iconSize: 42,
-                        size: 21,
-                        showTagline: true,
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (Navigator.canPop(context))
+                            Padding(
+                              padding: const EdgeInsets.only(right: 8.0),
+                              child: IconButton(
+                                icon: const Icon(Icons.arrow_back_rounded, size: 22),
+                                tooltip: 'Back to App',
+                                onPressed: () => Navigator.pop(context),
+                              ),
+                            ),
+                          const DayTrackLogo(
+                            variant: DayTrackLogoVariant.horizontal,
+                            iconSize: 42,
+                            size: 21,
+                            showTagline: true,
+                          ),
+                        ],
                       ),
-                      TextButton.icon(
-                        onPressed: () {
-                          Navigator.of(context).pushAndRemoveUntil(
-                            MaterialPageRoute(builder: (_) => const AppShell()),
-                            (_) => false,
-                          );
-                        },
-                        icon: const Icon(Icons.arrow_forward_rounded, size: 16),
-                        label: const Text('Guest Mode', style: TextStyle(fontWeight: FontWeight.w700)),
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          IconButton(
+                            icon: const Icon(Icons.dns_rounded, size: 20),
+                            tooltip: 'Server Connection',
+                            onPressed: _showServerConfigDialog,
+                          ),
+                          if (!Navigator.canPop(context))
+                            TextButton.icon(
+                              onPressed: () {
+                                Navigator.of(context).pushAndRemoveUntil(
+                                  MaterialPageRoute(builder: (_) => const AppShell()),
+                                  (_) => false,
+                                );
+                              },
+                              icon: const Icon(Icons.arrow_forward_rounded, size: 16),
+                              label: const Text('Guest Mode', style: TextStyle(fontWeight: FontWeight.w700)),
+                            ),
+                        ],
                       ),
                     ],
                   ),
@@ -498,7 +621,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     width: double.infinity,
                     height: 50,
                     child: OutlinedButton(
-                      onPressed: authService.isLoading ? null : _handleGoogleSignIn,
+                      onPressed: (authService.isLoading || _isGoogleSigningIn) ? null : _handleGoogleSignIn,
                       style: OutlinedButton.styleFrom(
                         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                         side: BorderSide(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
@@ -506,14 +629,24 @@ class _LoginScreenState extends State<LoginScreen> {
                       child: Row(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          Image.network(
-                            'https://developers.google.com/identity/images/g-logo.png',
-                            width: 20,
-                            height: 20,
-                            errorBuilder: (_, __, ___) => const Icon(Icons.g_mobiledata, color: AppColors.cyanAccent, size: 24),
-                          ),
+                          if (_isGoogleSigningIn)
+                            const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          else
+                            Image.network(
+                              'https://developers.google.com/identity/images/g-logo.png',
+                              width: 20,
+                              height: 20,
+                              errorBuilder: (_, __, ___) => const Icon(Icons.g_mobiledata, color: AppColors.cyanAccent, size: 24),
+                            ),
                           const SizedBox(width: 12),
-                          const Text('Continue with Google', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                          Text(
+                            _isGoogleSigningIn ? 'Opening Google Sign-In...' : 'Continue with Google',
+                            style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 14),
+                          ),
                         ],
                       ),
                     ),
@@ -526,8 +659,12 @@ class _LoginScreenState extends State<LoginScreen> {
                     width: double.infinity,
                     height: 50,
                     child: FilledButton.tonalIcon(
-                      onPressed: () {
-                        Navigator.of(context).pushAndRemoveUntil(
+                      onPressed: () async {
+                        final auth = context.read<AuthService>();
+                        final navigator = Navigator.of(context);
+                        await auth.continueAsGuest();
+                        if (!mounted) return;
+                        navigator.pushAndRemoveUntil(
                           MaterialPageRoute(builder: (_) => const AppShell()),
                           (_) => false,
                         );

@@ -8,20 +8,27 @@ class GuestMigrationDialog extends StatelessWidget {
   const GuestMigrationDialog({super.key});
 
   static Future<void> showIfGuestHasData(BuildContext context) async {
-    final activityService = context.read<ActivityService>();
-    if (!activityService.hasGuestActivities) return;
+    try {
+      final activityService = context.read<ActivityService>();
+      final hasGuestData = activityService.hasGuestActivities || await activityService.hasStoredGuestActivities();
+      if (!hasGuestData) return;
 
-    final shouldMigrate = await showDialog<bool>(
-      context: context,
-      barrierDismissible: false,
-      builder: (ctx) => const GuestMigrationDialog(),
-    );
+      if (!context.mounted) return;
+      final shouldMigrate = await showDialog<bool>(
+        context: context,
+        barrierDismissible: false,
+        builder: (ctx) => const GuestMigrationDialog(),
+      );
 
-    if (shouldMigrate == true) {
-      await activityService.migrateGuestDataToCloud();
+      if (shouldMigrate == true) {
+        await activityService.migrateGuestDataToCloud();
+      } else {
+        await activityService.clearGuestData();
+      }
+      await activityService.fetchActivities();
+    } catch (e) {
+      debugPrint('Guest migration dialog skipped: $e');
     }
-    await activityService.clearGuestData();
-    await activityService.fetchActivities();
   }
 
   @override

@@ -32,6 +32,7 @@ class _AddActivitySheetState extends State<AddActivitySheet> {
   String? _selectedIcon;
   DateTime _startDate = DateTime.now();
   bool _showEmojiPicker = false;
+  bool _isSubmitting = false;
 
   @override
   void initState() {
@@ -51,6 +52,8 @@ class _AddActivitySheetState extends State<AddActivitySheet> {
   }
 
   Future<void> _handleAddActivity() async {
+    if (_isSubmitting) return;
+
     final name = _nameController.text.trim();
     final frequencyValue = int.tryParse(_frequencyController.text);
     final durationValue = int.tryParse(_durationController.text);
@@ -66,6 +69,8 @@ class _AddActivitySheetState extends State<AddActivitySheet> {
       _showError('Duration must be a positive whole number');
       return;
     }
+
+    setState(() => _isSubmitting = true);
 
     try {
       await context.read<ActivityService>().addActivity(
@@ -90,6 +95,8 @@ class _AddActivitySheetState extends State<AddActivitySheet> {
       }
     } catch (e) {
       if (mounted) _showError('Failed to add activity: ${e.toString()}');
+    } finally {
+      if (mounted) setState(() => _isSubmitting = false);
     }
   }
 
@@ -428,17 +435,31 @@ class _AddActivitySheetState extends State<AddActivitySheet> {
                 width: double.infinity,
                 height: 52,
                 child: FilledButton(
-                  onPressed: _handleAddActivity,
+                  onPressed: _isSubmitting ? null : _handleAddActivity,
                   style: FilledButton.styleFrom(
                     backgroundColor: AppColors.primary,
+                    disabledBackgroundColor: AppColors.primary.withValues(alpha: 0.6),
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(16),
                     ),
                   ),
-                  child: const Text(
-                    'Add Activity',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
-                  ),
+                  child: _isSubmitting
+                      ? const SizedBox(
+                          width: 22,
+                          height: 22,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2.5,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text(
+                          'Add Activity',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.white,
+                          ),
+                        ),
                 ),
               ),
             ],

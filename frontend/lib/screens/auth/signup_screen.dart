@@ -35,6 +35,7 @@ class _SignupScreenState extends State<SignupScreen> {
   int _resendCountdown = 0;
   Timer? _countdownTimer;
   bool _hasNavigated = false;
+  bool _isSubmitting = false;
 
   @override
   void initState() {
@@ -63,7 +64,11 @@ class _SignupScreenState extends State<SignupScreen> {
     _hasNavigated = true;
     final userName = context.read<AuthService>().currentUser?.name ?? 'User';
     _showMessage('Successfully registered and logged in! Welcome, $userName.', isError: false);
-    await GuestMigrationDialog.showIfGuestHasData(context);
+    try {
+      await GuestMigrationDialog.showIfGuestHasData(context);
+    } catch (e) {
+      debugPrint('Guest migration skipped: $e');
+    }
     if (mounted) {
       Navigator.of(context).pushAndRemoveUntil(
         MaterialPageRoute(builder: (_) => const AppShell()),
@@ -124,6 +129,8 @@ class _SignupScreenState extends State<SignupScreen> {
     }
 
     final authService = context.read<AuthService>();
+    if (_isSubmitting || authService.isLoading) return;
+    setState(() => _isSubmitting = true);
 
     try {
       final res = await authService.signup(
@@ -148,7 +155,34 @@ class _SignupScreenState extends State<SignupScreen> {
         }
       }
     } catch (e) {
-      _showMessage(e.toString().replaceAll('Exception: ', ''), isError: true);
+      final msg = e.toString().replaceAll('Exception: ', '');
+      if (msg.contains('already exists')) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(msg),
+            backgroundColor: AppColors.roseError,
+            behavior: SnackBarBehavior.floating,
+            duration: const Duration(seconds: 8),
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+            action: SnackBarAction(
+              label: 'Log In',
+              textColor: Colors.white,
+              onPressed: () {
+                Navigator.of(context).pushReplacement(
+                  MaterialPageRoute(builder: (_) => const LoginScreen()),
+                );
+              },
+            ),
+          ),
+        );
+      } else {
+        _showMessage(msg, isError: true);
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _isSubmitting = false);
+      }
     }
   }
 
@@ -244,22 +278,37 @@ class _SignupScreenState extends State<SignupScreen> {
                   Row(
                     mainAxisAlignment: MainAxisAlignment.spaceBetween,
                     children: [
-                      const DayTrackLogo(
-                        variant: DayTrackLogoVariant.horizontal,
-                        iconSize: 42,
-                        size: 21,
-                        showTagline: true,
+                      Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          if (Navigator.canPop(context))
+                            Padding(
+                              padding: const EdgeInsets.only(right: 8.0),
+                              child: IconButton(
+                                icon: const Icon(Icons.arrow_back_rounded, size: 22),
+                                tooltip: 'Back',
+                                onPressed: () => Navigator.pop(context),
+                              ),
+                            ),
+                          const DayTrackLogo(
+                            variant: DayTrackLogoVariant.horizontal,
+                            iconSize: 42,
+                            size: 21,
+                            showTagline: true,
+                          ),
+                        ],
                       ),
-                      TextButton.icon(
-                        onPressed: () {
-                          Navigator.of(context).pushAndRemoveUntil(
-                            MaterialPageRoute(builder: (_) => const AppShell()),
-                            (_) => false,
-                          );
-                        },
-                        icon: const Icon(Icons.arrow_forward_rounded, size: 16),
-                        label: const Text('Guest Mode', style: TextStyle(fontWeight: FontWeight.w700)),
-                      ),
+                      if (!Navigator.canPop(context))
+                        TextButton.icon(
+                          onPressed: () {
+                            Navigator.of(context).pushAndRemoveUntil(
+                              MaterialPageRoute(builder: (_) => const AppShell()),
+                              (_) => false,
+                            );
+                          },
+                          icon: const Icon(Icons.arrow_forward_rounded, size: 16),
+                          label: const Text('Guest Mode', style: TextStyle(fontWeight: FontWeight.w700)),
+                        ),
                     ],
                   ),
                   const SizedBox(height: 32),
@@ -584,8 +633,12 @@ class _SignupScreenState extends State<SignupScreen> {
                     width: double.infinity,
                     height: 50,
                     child: FilledButton.tonalIcon(
-                      onPressed: () {
-                        Navigator.of(context).pushAndRemoveUntil(
+                      onPressed: () async {
+                        final auth = context.read<AuthService>();
+                        final navigator = Navigator.of(context);
+                        await auth.continueAsGuest();
+                        if (!mounted) return;
+                        navigator.pushAndRemoveUntil(
                           MaterialPageRoute(builder: (_) => const AppShell()),
                           (_) => false,
                         );

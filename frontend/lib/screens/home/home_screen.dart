@@ -9,6 +9,9 @@ import 'add_activity_sheet.dart';
 import 'activity_card.dart';
 import '../progress/progress_screen.dart';
 
+/// Legacy home screen. Superseded by [ProgressHomeScreen].
+/// Retained for reference and backward-compatibility.
+@Deprecated('Use ProgressHomeScreen instead')
 class HomeScreen extends StatefulWidget {
   final bool previewMode;
 

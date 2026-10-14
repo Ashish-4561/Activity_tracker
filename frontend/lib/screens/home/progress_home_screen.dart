@@ -10,6 +10,7 @@ import '../../widgets/daytrack_logo.dart';
 import '../../widgets/neumorphic_card.dart';
 import '../../widgets/progress_ring.dart';
 import '../profile/profile_screen.dart';
+import '../auth/login_screen.dart';
 import 'activity_card.dart';
 import 'add_activity_sheet.dart';
 
@@ -738,18 +739,41 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
                             size: 19,
                             showTagline: true,
                           ),
-                          IconButton(
-                            tooltip: 'Profile & Settings',
-                            icon: Container(
-                              padding: const EdgeInsets.all(8),
-                              decoration: BoxDecoration(
-                                color: isDark ? AppColors.darkSurfaceRaised : const Color(0xFFF1F5F9),
-                                borderRadius: BorderRadius.circular(12),
-                                border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (auth.isGuest) ...[
+                                FilledButton.tonalIcon(
+                                  onPressed: () {
+                                    Navigator.of(context).push(
+                                      MaterialPageRoute(builder: (_) => const LoginScreen()),
+                                    );
+                                  },
+                                  icon: const Icon(Icons.login_rounded, size: 16),
+                                  label: const Text('Log In', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                                  style: FilledButton.styleFrom(
+                                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                                    minimumSize: Size.zero,
+                                    tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                              ],
+                              IconButton(
+                                tooltip: 'Profile & Settings',
+                                icon: Container(
+                                  padding: const EdgeInsets.all(8),
+                                  decoration: BoxDecoration(
+                                    color: isDark ? AppColors.darkSurfaceRaised : const Color(0xFFF1F5F9),
+                                    borderRadius: BorderRadius.circular(12),
+                                    border: Border.all(color: isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                                  ),
+                                  child: const Icon(Icons.person_rounded, size: 20, color: AppColors.primary),
+                                ),
+                                onPressed: () => _showProfileMenu(context),
                               ),
-                              child: const Icon(Icons.person_rounded, size: 20, color: AppColors.primary),
-                            ),
-                            onPressed: () => _showProfileMenu(context),
+                            ],
                           ),
                         ],
                       ),
@@ -821,14 +845,18 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
                             ),
                           ),
                           FilledButton(
-                            onPressed: () => AuthPromptDialog.show(context),
+                            onPressed: () {
+                              Navigator.of(context).push(
+                                MaterialPageRoute(builder: (_) => const LoginScreen()),
+                              );
+                            },
                             style: FilledButton.styleFrom(
                               backgroundColor: AppColors.primary,
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
                               minimumSize: Size.zero,
                               shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
                             ),
-                            child: const Text('Save Cloud', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
+                            child: const Text('Log In / Sync', style: TextStyle(fontSize: 12, fontWeight: FontWeight.bold)),
                           ),
                         ],
                       ),
@@ -1486,15 +1514,17 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
             onTap: () {
               Future.microtask(() {
                 if (context.mounted) {
-                  AuthPromptDialog.show(context);
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  );
                 }
               });
             },
             child: const Row(
               children: [
-                Icon(Icons.cloud_upload_outlined, size: 18, color: AppColors.cyanAccent),
+                Icon(Icons.login_rounded, size: 18, color: AppColors.cyanAccent),
                 SizedBox(width: 10),
-                Text('Log In / Create Account', style: TextStyle(color: AppColors.cyanAccent)),
+                Text('Log In / Create Account', style: TextStyle(color: AppColors.cyanAccent, fontWeight: FontWeight.bold)),
               ],
             ),
           )

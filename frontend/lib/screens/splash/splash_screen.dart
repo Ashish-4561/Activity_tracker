@@ -5,6 +5,7 @@ import '../../services/auth_service.dart';
 import '../../services/theme_service.dart';
 import '../../widgets/daytrack_logo.dart';
 import '../app_shell.dart';
+import '../auth/login_screen.dart';
 
 class SplashScreen extends StatefulWidget {
   final bool previewMode;
@@ -19,6 +20,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
   late AnimationController _animController;
   late Animation<double> _scaleAnimation;
   late Animation<double> _fadeAnimation;
+  Timer? _splashTimer;
 
   @override
   void initState() {
@@ -52,27 +54,45 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
   Future<void> _initializeAppAndNavigate() async {
     // 1-second minimum splash display for snappy experience
-    await Future.delayed(const Duration(milliseconds: 1000));
+    final completer = Completer<void>();
+    _splashTimer = Timer(const Duration(milliseconds: 1000), () {
+      if (!completer.isCompleted) completer.complete();
+    });
+
+    try {
+      await completer.future;
+    } catch (_) {}
 
     if (!mounted) return;
 
-    // If device is slow or still initializing auth state, give it up to a short moment
+    // Allow auth initialization and session restoration to complete
     try {
       final auth = context.read<AuthService>();
       int extraChecks = 0;
-      while (auth.authState == AuthState.loading && extraChecks < 6 && mounted) {
-        await Future.delayed(const Duration(milliseconds: 100));
+      while (auth.authState == AuthState.loading && extraChecks < 20 && mounted) {
+        final loopCompleter = Completer<void>();
+        _splashTimer = Timer(const Duration(milliseconds: 100), () {
+          if (!loopCompleter.isCompleted) loopCompleter.complete();
+        });
+        try {
+          await loopCompleter.future;
+        } catch (_) {}
         extraChecks++;
       }
     } catch (_) {}
 
     if (!mounted) return;
 
+    final auth = context.read<AuthService>();
+    final bool shouldOpenApp = widget.previewMode ||
+        auth.isLoggedIn ||
+        (auth.isGuest && !auth.isTrialExpired);
+
     Navigator.of(context).pushReplacement(
       PageRouteBuilder(
         transitionDuration: const Duration(milliseconds: 350),
         pageBuilder: (context, animation, secondaryAnimation) =>
-            AppShell(previewMode: widget.previewMode),
+            shouldOpenApp ? AppShell(previewMode: widget.previewMode) : const LoginScreen(),
         transitionsBuilder: (context, animation, secondaryAnimation, child) {
           return FadeTransition(
             opacity: animation,
@@ -85,6 +105,7 @@ class _SplashScreenState extends State<SplashScreen> with SingleTickerProviderSt
 
   @override
   void dispose() {
+    _splashTimer?.cancel();
     _animController.dispose();
     super.dispose();
   }

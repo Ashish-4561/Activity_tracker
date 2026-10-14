@@ -1,3 +1,4 @@
+import 'dart:convert';
 import 'package:flutter/foundation.dart';
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -53,9 +54,24 @@ class User {
       notificationsEnabled: parseBool(json['notifications_enabled'], true),
     );
   }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'id': id,
+      'name': name,
+      'email': email,
+      'phone': phone,
+      'profile_image': profileImage,
+      'auth_provider': authProvider,
+      'theme': theme,
+      'ai_enabled': aiEnabled,
+      'ai_suggestions_enabled': aiSuggestionsEnabled,
+      'notifications_enabled': notificationsEnabled,
+    };
+  }
 }
 
-enum AuthState { loading, guest, authenticated }
+enum AuthState { loading, guest, authenticated, unauthenticated }
 
 class AuthService extends ChangeNotifier {
   final ApiService apiService;
@@ -64,6 +80,24 @@ class AuthService extends ChangeNotifier {
   bool _isLoading = false;
   String? _error;
   DateTime? _guestTrialStartTime;
+
+  static const String _kCachedUserKey = 'cached_user_profile';
+  static const String _kGuestModeKey = 'guest_mode_enabled';
+
+  /// Centralized OAuth and deep link redirect URI
+  static String get oauthRedirectUri {
+    if (kIsWeb) {
+      return dotenv.env['FRONTEND_URL'] ??
+          (Uri.base.hasPort && Uri.base.port != 0
+              ? '${Uri.base.scheme}://${Uri.base.host}:${Uri.base.port}'
+              : 'http://localhost:3000');
+    }
+    final envUri = dotenv.env['OAUTH_REDIRECT_URI']?.trim() ?? '';
+    if (envUri.isNotEmpty) {
+      return envUri;
+    }
+    return 'io.supabase.activitytracker://login-callback';
+  }
 
   AuthService(this.apiService) {
     _initializeAuth();
@@ -74,7 +108,8 @@ class AuthService extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
   bool get isLoggedIn => _authState == AuthState.authenticated && _currentUser != null;
-  bool get isGuest => _authState == AuthState.guest || _currentUser == null;
+  bool get isGuest => _authState == AuthState.guest;
+  bool get isUnauthenticated => _authState == AuthState.unauthenticated;
 
   DateTime? get guestTrialStartTime => _guestTrialStartTime;
 
@@ -86,12 +121,46 @@ class AuthService extends ChangeNotifier {
     return remaining > 0 ? remaining : 0;
   }
 
-  /// Returns true if guest trial has expired
+  /// Returns true if guest trial has expired (2-day limit exceeded)
   bool get isTrialExpired {
-    if (!isGuest) return false;
     if (_guestTrialStartTime == null) return false;
     final elapsed = DateTime.now().difference(_guestTrialStartTime!).inDays;
     return elapsed >= AppConfig.guestTrialDays;
+  }
+
+  Future<void> _saveCachedUserProfile(User user) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kCachedUserKey, jsonEncode(user.toJson()));
+    } catch (_) {}
+  }
+
+  Future<User?> _loadCachedUserProfile() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kCachedUserKey);
+      if (raw != null && raw.isNotEmpty) {
+        return User.fromJson(Map<String, dynamic>.from(jsonDecode(raw)));
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  Future<void> _clearCachedUserProfile() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove(_kCachedUserKey);
+    } catch (_) {}
+  }
+
+  /// Sets guest mode when explicitly requested by user
+  Future<void> continueAsGuest() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setBool(_kGuestModeKey, true);
+    _currentUser = null;
+    _authState = AuthState.guest;
+    _error = null;
+    notifyListeners();
   }
 
   Future<void> _initializeAuth() async {
@@ -110,7 +179,11 @@ class AuthService extends ChangeNotifier {
         Supabase.instance.client.auth.onAuthStateChange.listen((data) async {
           final event = data.event;
           final session = data.session;
-          if (session != null && (event == AuthChangeEvent.signedIn || event == AuthChangeEvent.tokenRefreshed || event == AuthChangeEvent.userUpdated || event == AuthChangeEvent.initialSession)) {
+          if (session != null &&
+              (event == AuthChangeEvent.signedIn ||
+                  event == AuthChangeEvent.tokenRefreshed ||
+                  event == AuthChangeEvent.userUpdated ||
+                  event == AuthChangeEvent.initialSession)) {
             final supabaseUser = session.user;
             _currentUser = User(
               id: supabaseUser.id,
@@ -127,20 +200,24 @@ class AuthService extends ChangeNotifier {
             );
             _authState = AuthState.authenticated;
             await apiService.setToken(session.accessToken);
-            try {
-              await fetchProfile();
-            } catch (_) {}
+            await _saveCachedUserProfile(_currentUser!);
             notifyListeners();
+
+            // Background non-fatal profile enrichment
+            try {
+              await fetchProfile().timeout(const Duration(seconds: 4));
+            } catch (_) {}
           } else if (event == AuthChangeEvent.signedOut) {
             _currentUser = null;
-            _authState = AuthState.guest;
+            _authState = AuthState.unauthenticated;
             await apiService.clearToken();
+            await _clearCachedUserProfile();
             notifyListeners();
           }
         });
       } catch (_) {}
 
-      // Check active Supabase session on startup
+      // 1. Check active Supabase session on startup
       try {
         final currentSession = Supabase.instance.client.auth.currentSession;
         if (currentSession != null) {
@@ -160,24 +237,46 @@ class AuthService extends ChangeNotifier {
           );
           _authState = AuthState.authenticated;
           await apiService.setToken(currentSession.accessToken);
+          await _saveCachedUserProfile(_currentUser!);
+          notifyListeners();
+
           try {
             await fetchProfile();
           } catch (_) {}
-          notifyListeners();
           return;
         }
       } catch (_) {}
 
+      // 2. Check stored token fallback
       final token = await apiService.getToken();
-      if (token != null) {
-        await fetchProfile();
+      if (token != null && token.isNotEmpty) {
+        final cached = await _loadCachedUserProfile();
+        if (cached != null) {
+          _currentUser = cached;
+        }
         _authState = AuthState.authenticated;
-      } else {
-        _authState = AuthState.guest;
+        notifyListeners();
+        try {
+          await fetchProfile();
+        } catch (_) {}
+        return;
+      }
+
+      // 3. Check guest trial vs unauthenticated
+      if (_currentUser == null) {
+        if (!isTrialExpired) {
+          // Default to guest mode during the 2-day trial so the user immediately sees the main UI
+          _authState = AuthState.guest;
+          await prefs.setBool(_kGuestModeKey, true);
+        } else {
+          // 2-day trial expired: require login
+          _authState = AuthState.unauthenticated;
+          await prefs.setBool(_kGuestModeKey, false);
+        }
       }
     } catch (e) {
       _error = 'Failed to initialize auth';
-      _authState = AuthState.guest;
+      _authState = AuthState.unauthenticated;
     } finally {
       notifyListeners();
     }
@@ -229,12 +328,7 @@ class AuthService extends ChangeNotifier {
 
     try {
       final supabase = Supabase.instance.client;
-      final redirectUrl = kIsWeb
-          ? (dotenv.env['FRONTEND_URL'] ??
-              (Uri.base.hasPort && Uri.base.port != 0
-                  ? '${Uri.base.scheme}://${Uri.base.host}:${Uri.base.port}'
-                  : 'http://localhost:3000'))
-          : 'io.supabase.activitytracker://login-callback';
+      final redirectUrl = oauthRedirectUri;
 
       final AuthResponse res = await _retryOnNetworkError(() => supabase.auth.signUp(
         email: email,
@@ -253,6 +347,13 @@ class AuthService extends ChangeNotifier {
         throw const AuthException('Signup failed: No user record returned.');
       }
 
+      // Supabase user identity check for duplicate account detection:
+      // When email confirmations are enabled and an account with this email already exists,
+      // Supabase returns a user object where identities is an empty list and session is null.
+      if (supabaseUser.identities != null && supabaseUser.identities!.isEmpty) {
+        throw const AuthException('An account with this email already exists. Please log in instead.');
+      }
+
       final bool requiresConfirmation = session == null;
 
       final user = User(
@@ -267,9 +368,10 @@ class AuthService extends ChangeNotifier {
         _currentUser = user;
         _authState = AuthState.authenticated;
         await apiService.setToken(session.accessToken);
+        await _saveCachedUserProfile(user);
       } else {
         _currentUser = user;
-        _authState = AuthState.guest;
+        _authState = AuthState.unauthenticated;
       }
 
       _isLoading = false;
@@ -285,7 +387,11 @@ class AuthService extends ChangeNotifier {
       String friendlyMessage = e.message;
       final msgLower = e.message.toLowerCase();
 
-      if (msgLower.contains('already registered') || e.statusCode == '422' || msgLower.contains('user already exists')) {
+      if (msgLower.contains('already registered') ||
+          msgLower.contains('already exists') ||
+          msgLower.contains('already in use') ||
+          msgLower.contains('duplicate') ||
+          e.statusCode == '422') {
         friendlyMessage = 'An account with this email already exists. Please log in instead.';
       } else if (msgLower.contains('password') && (msgLower.contains('short') || msgLower.contains('characters') || msgLower.contains('weak'))) {
         friendlyMessage = 'Password must be at least 6 characters long.';
@@ -323,9 +429,7 @@ class AuthService extends ChangeNotifier {
 
     try {
       final supabase = Supabase.instance.client;
-      final redirectUrl = kIsWeb
-          ? (dotenv.env['FRONTEND_URL'] ?? 'http://localhost:3000')
-          : 'io.supabase.activitytracker://login-callback';
+      final redirectUrl = oauthRedirectUri;
 
       await _retryOnNetworkError(() => supabase.auth.resend(
         type: OtpType.signup,
@@ -415,9 +519,10 @@ class AuthService extends ChangeNotifier {
       );
       _authState = AuthState.authenticated;
       await apiService.setToken(session.accessToken);
+      await _saveCachedUserProfile(_currentUser!);
 
       try {
-        await fetchProfile();
+        await fetchProfile().timeout(const Duration(seconds: 4));
       } catch (_) {
         // Non-fatal profile enrichment failure: user is already logged in
       }
@@ -522,18 +627,13 @@ class AuthService extends ChangeNotifier {
 
     try {
       final supabase = Supabase.instance.client;
-      final redirectUrl = kIsWeb
-          ? (dotenv.env['FRONTEND_URL'] ??
-              (Uri.base.hasPort && Uri.base.port != 0
-                  ? '${Uri.base.scheme}://${Uri.base.host}:${Uri.base.port}'
-                  : 'http://localhost:3000'))
-          : 'io.supabase.activitytracker://login-callback';
+      final redirectUrl = oauthRedirectUri;
 
       final bool launched = await supabase.auth.signInWithOAuth(
         OAuthProvider.google,
         redirectTo: redirectUrl,
         authScreenLaunchMode:
-            kIsWeb ? LaunchMode.platformDefault : LaunchMode.inAppBrowserView,
+            kIsWeb ? LaunchMode.platformDefault : LaunchMode.externalApplication,
       );
 
       _isLoading = false;
@@ -605,6 +705,7 @@ class AuthService extends ChangeNotifier {
       final response = await apiService.getProfile();
       if (response['user'] != null) {
         _currentUser = User.fromJson(response['user']);
+        await _saveCachedUserProfile(_currentUser!);
       }
       _authState = AuthState.authenticated;
       notifyListeners();
@@ -628,14 +729,16 @@ class AuthService extends ChangeNotifier {
               authProvider: supabaseUser.appMetadata['provider']?.toString() ?? 'email',
             );
             _authState = AuthState.authenticated;
+            await _saveCachedUserProfile(_currentUser!);
             notifyListeners();
             return;
           }
         } catch (_) {}
+        _error = 'Failed to fetch profile';
+        notifyListeners();
+        rethrow;
       }
-      _error = 'Failed to fetch profile';
-      notifyListeners();
-      rethrow;
+      // If user is already authenticated via Supabase session, do not throw or demote authState
     }
   }
 
@@ -725,8 +828,16 @@ class AuthService extends ChangeNotifier {
         await googleSignIn.signOut();
       }
     } catch (_) {}
+    final prefs = await SharedPreferences.getInstance();
+    await _clearCachedUserProfile();
     _currentUser = null;
-    _authState = AuthState.guest;
+    if (!isTrialExpired) {
+      _authState = AuthState.guest;
+      await prefs.setBool(_kGuestModeKey, true);
+    } else {
+      _authState = AuthState.unauthenticated;
+      await prefs.setBool(_kGuestModeKey, false);
+    }
     _error = null;
     notifyListeners();
   }

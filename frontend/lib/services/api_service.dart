@@ -1,15 +1,57 @@
+import 'dart:async';
+import 'dart:io' show SocketException;
 import 'package:http/http.dart' as http;
 import 'dart:convert';
-import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../config/api_config.dart';
+
+class ApiException implements Exception {
+  final String message;
+  final int? statusCode;
+  final bool isNetworkError;
+
+  ApiException(this.message, {this.statusCode, this.isNetworkError = false});
+
+  @override
+  String toString() => message;
+}
 
 class ApiService {
-  late String baseUrl;
+  String get baseUrl => ApiConfig.getBaseUrl();
   static const String _tokenKey = 'auth_token';
+  static const Duration requestTimeout = Duration(seconds: 15);
 
-  ApiService() {
-    baseUrl = dotenv.env['API_URL'] ?? 'http://localhost:5000/api';
+  ApiService();
+
+  Never _handleError(dynamic error, [Uri? uri]) {
+    if (error is SocketException) {
+      final host = uri?.host ?? 'server';
+      throw ApiException(
+        'Unable to reach server ($host). Ensure the backend is running and reachable from this network.',
+        statusCode: 0,
+        isNetworkError: true,
+      );
+    }
+    if (error is http.ClientException) {
+      final host = uri?.host ?? 'server';
+      throw ApiException(
+        'Connection refused to $host. Please ensure the backend is running and accessible.',
+        statusCode: 0,
+        isNetworkError: true,
+      );
+    }
+    if (error is TimeoutException) {
+      throw ApiException(
+        'Request timed out. The backend server took too long to respond.',
+        statusCode: 408,
+        isNetworkError: true,
+      );
+    }
+    if (error is ApiException) {
+      throw error;
+    }
+    throw ApiException(error.toString().replaceAll('Exception: ', ''));
   }
 
   Future<String?> getToken() async {
@@ -55,26 +97,30 @@ class ApiService {
     required String email,
     required String password,
   }) async {
+    final uri = Uri.parse('$baseUrl/auth/signup');
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/auth/signup'),
-        headers: await _getHeaders(auth: false),
-        body: jsonEncode({
-          'name': name,
-          'email': email,
-          'password': password,
-        }),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: await _getHeaders(auth: false),
+            body: jsonEncode({
+              'name': name,
+              'email': email,
+              'password': password,
+            }),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 201) {
         final data = jsonDecode(response.body);
         await setToken(data['token']);
         return data;
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Signup failed');
+        final err = jsonDecode(response.body)['error'] ?? 'Signup failed';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
@@ -82,25 +128,29 @@ class ApiService {
     required String email,
     required String password,
   }) async {
+    final uri = Uri.parse('$baseUrl/auth/login');
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/auth/login'),
-        headers: await _getHeaders(auth: false),
-        body: jsonEncode({
-          'email': email,
-          'password': password,
-        }),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: await _getHeaders(auth: false),
+            body: jsonEncode({
+              'email': email,
+              'password': password,
+            }),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         await setToken(data['token']);
         return data;
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Login failed');
+        final err = jsonDecode(response.body)['error'] ?? 'Login failed';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
@@ -109,46 +159,58 @@ class ApiService {
     required String name,
     String? profileImage,
     String? googleId,
+    String? idToken,
+    String? supabaseToken,
   }) async {
+    final uri = Uri.parse('$baseUrl/auth/google');
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/auth/google'),
-        headers: await _getHeaders(auth: false),
-        body: jsonEncode({
-          'email': email,
-          'name': name,
-          if (profileImage != null) 'profileImage': profileImage,
-          if (googleId != null) 'googleId': googleId,
-        }),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: await _getHeaders(auth: false),
+            body: jsonEncode({
+              'email': email,
+              'name': name,
+              if (profileImage != null) 'profileImage': profileImage,
+              if (googleId != null) 'googleId': googleId,
+              if (idToken != null) 'idToken': idToken,
+              if (supabaseToken != null) 'supabaseToken': supabaseToken,
+            }),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         await setToken(data['token']);
         return data;
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Google authentication failed');
+        final err = jsonDecode(response.body)['error'] ?? 'Google authentication failed';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
   Future<Map<String, dynamic>> sendPhoneOtp({required String phone}) async {
+    final uri = Uri.parse('$baseUrl/auth/phone/send-otp');
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/auth/phone/send-otp'),
-        headers: await _getHeaders(auth: false),
-        body: jsonEncode({'phone': phone}),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: await _getHeaders(auth: false),
+            body: jsonEncode({'phone': phone}),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to send verification code');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to send verification code';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
@@ -157,43 +219,51 @@ class ApiService {
     required String otp,
     String? name,
   }) async {
+    final uri = Uri.parse('$baseUrl/auth/phone/verify-otp');
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/auth/phone/verify-otp'),
-        headers: await _getHeaders(auth: false),
-        body: jsonEncode({
-          'phone': phone,
-          'otp': otp,
-          if (name != null) 'name': name,
-        }),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: await _getHeaders(auth: false),
+            body: jsonEncode({
+              'phone': phone,
+              'otp': otp,
+              if (name != null) 'name': name,
+            }),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         final data = jsonDecode(response.body);
         await setToken(data['token']);
         return data;
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Phone verification failed');
+        final err = jsonDecode(response.body)['error'] ?? 'Phone verification failed';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
   Future<Map<String, dynamic>> getProfile() async {
+    final uri = Uri.parse('$baseUrl/auth/profile');
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/auth/profile'),
-        headers: await _getHeaders(),
-      );
+      final response = await http
+          .get(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception('Failed to get profile');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to get profile';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
@@ -205,6 +275,7 @@ class ApiService {
     bool? aiSuggestionsEnabled,
     bool? notificationsEnabled,
   }) async {
+    final uri = Uri.parse('$baseUrl/auth/profile');
     try {
       final body = <String, dynamic>{};
       if (name != null) body['name'] = name;
@@ -214,19 +285,22 @@ class ApiService {
       if (aiSuggestionsEnabled != null) body['ai_suggestions_enabled'] = aiSuggestionsEnabled;
       if (notificationsEnabled != null) body['notifications_enabled'] = notificationsEnabled;
 
-      final response = await http.put(
-        Uri.parse('$baseUrl/auth/profile'),
-        headers: await _getHeaders(),
-        body: jsonEncode(body),
-      );
+      final response = await http
+          .put(
+            uri,
+            headers: await _getHeaders(),
+            body: jsonEncode(body),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to update profile');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to update profile';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
@@ -234,41 +308,49 @@ class ApiService {
     required String currentPassword,
     required String newPassword,
   }) async {
+    final uri = Uri.parse('$baseUrl/auth/change-password');
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/auth/change-password'),
-        headers: await _getHeaders(),
-        body: jsonEncode({
-          'currentPassword': currentPassword,
-          'newPassword': newPassword,
-        }),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: await _getHeaders(),
+            body: jsonEncode({
+              'currentPassword': currentPassword,
+              'newPassword': newPassword,
+            }),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to change password');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to change password';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
   Future<Map<String, dynamic>> deleteAccount() async {
+    final uri = Uri.parse('$baseUrl/auth/account');
     try {
-      final response = await http.delete(
-        Uri.parse('$baseUrl/auth/account'),
-        headers: await _getHeaders(),
-      );
+      final response = await http
+          .delete(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         await clearToken();
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to delete account');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to delete account';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
@@ -286,52 +368,59 @@ class ApiService {
     String? color,
     String? description,
   }) async {
+    final uri = Uri.parse('$baseUrl/activities');
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/activities'),
-        headers: await _getHeaders(),
-        body: jsonEncode({
-          'name': name,
-          'frequency': frequency,
-          'group_name': groupName,
-          'icon': icon,
-          'frequency_value': frequencyValue,
-          'frequency_unit': frequencyUnit,
-          'duration_value': durationValue,
-          'duration_unit': durationUnit,
-          'start_date': startDate,
-          'color': color,
-          'description': description,
-        }),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: await _getHeaders(),
+            body: jsonEncode({
+              'name': name,
+              'frequency': frequency,
+              'group_name': groupName,
+              'icon': icon,
+              'frequency_value': frequencyValue,
+              'frequency_unit': frequencyUnit,
+              'duration_value': durationValue,
+              'duration_unit': durationUnit,
+              'start_date': startDate,
+              'color': color,
+              'description': description,
+            }),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 201) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to create activity');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to create activity';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
   Future<Map<String, dynamic>> getActivities({String? date}) async {
+    final uri = date != null && date.isNotEmpty
+        ? Uri.parse('$baseUrl/activities?date=$date')
+        : Uri.parse('$baseUrl/activities');
     try {
-      final uri = date != null && date.isNotEmpty
-          ? Uri.parse('$baseUrl/activities?date=$date')
-          : Uri.parse('$baseUrl/activities');
-      final response = await http.get(
-        uri,
-        headers: await _getHeaders(),
-      );
+      final response = await http
+          .get(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception('Failed to get activities');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to get activities';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
@@ -348,6 +437,7 @@ class ApiService {
     String? durationUnit,
     String? startDate,
   }) async {
+    final uri = Uri.parse('$baseUrl/activities/$id');
     try {
       final body = <String, dynamic>{};
       if (name != null) body['name'] = name;
@@ -361,54 +451,65 @@ class ApiService {
       if (durationUnit != null) body['duration_unit'] = durationUnit;
       if (startDate != null) body['start_date'] = startDate;
 
-      final response = await http.put(
-        Uri.parse('$baseUrl/activities/$id'),
-        headers: await _getHeaders(),
-        body: jsonEncode(body),
-      );
+      final response = await http
+          .put(
+            uri,
+            headers: await _getHeaders(),
+            body: jsonEncode(body),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to update activity');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to update activity';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
   Future<Map<String, dynamic>> deleteActivity(String id) async {
+    final uri = Uri.parse('$baseUrl/activities/$id');
     try {
-      final response = await http.delete(
-        Uri.parse('$baseUrl/activities/$id'),
-        headers: await _getHeaders(),
-      );
+      final response = await http
+          .delete(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to delete activity');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to delete activity';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
   Future<Map<String, dynamic>> deleteGroup(String groupName) async {
+    final encoded = Uri.encodeComponent(groupName);
+    final uri = Uri.parse('$baseUrl/activities/group/$encoded');
     try {
-      final encoded = Uri.encodeComponent(groupName);
-      final response = await http.delete(
-        Uri.parse('$baseUrl/activities/group/$encoded'),
-        headers: await _getHeaders(),
-      );
+      final response = await http
+          .delete(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to delete group');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to delete group';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
@@ -416,23 +517,27 @@ class ApiService {
     required String oldGroupName,
     required String newGroupName,
   }) async {
+    final encoded = Uri.encodeComponent(oldGroupName);
+    final uri = Uri.parse('$baseUrl/activities/group/$encoded/rename');
     try {
-      final encoded = Uri.encodeComponent(oldGroupName);
-      final response = await http.put(
-        Uri.parse('$baseUrl/activities/group/$encoded/rename'),
-        headers: await _getHeaders(),
-        body: jsonEncode({
-          'newGroupName': newGroupName,
-        }),
-      );
+      final response = await http
+          .put(
+            uri,
+            headers: await _getHeaders(),
+            body: jsonEncode({
+              'newGroupName': newGroupName,
+            }),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to rename group');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to rename group';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
@@ -441,23 +546,27 @@ class ApiService {
     required String activityId,
     String? date,
   }) async {
+    final uri = Uri.parse('$baseUrl/completions/complete');
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/completions/complete'),
-        headers: await _getHeaders(),
-        body: jsonEncode({
-          'activity_id': activityId,
-          if (date != null) 'date': date,
-        }),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: await _getHeaders(),
+            body: jsonEncode({
+              'activity_id': activityId,
+              if (date != null) 'date': date,
+            }),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to complete activity');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to complete activity';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
@@ -465,105 +574,122 @@ class ApiService {
     required String activityId,
     String? date,
   }) async {
+    final uri = Uri.parse('$baseUrl/completions/uncomplete');
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/completions/uncomplete'),
-        headers: await _getHeaders(),
-        body: jsonEncode({
-          'activity_id': activityId,
-          if (date != null) 'date': date,
-        }),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: await _getHeaders(),
+            body: jsonEncode({
+              'activity_id': activityId,
+              if (date != null) 'date': date,
+            }),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception(jsonDecode(response.body)['error'] ?? 'Failed to uncomplete activity');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to uncomplete activity';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
   Future<Map<String, dynamic>> getCompletionsByDate({String? date}) async {
+    final baseUri = Uri.parse('$baseUrl/completions/by-date');
+    final uri = date != null ? baseUri.replace(queryParameters: {'date': date}) : baseUri;
     try {
-      final uri = Uri.parse('$baseUrl/completions/by-date');
-      final queryUri = date != null ? uri.replace(queryParameters: {'date': date}) : uri;
-
-      final response = await http.get(
-        queryUri,
-        headers: await _getHeaders(),
-      );
+      final response = await http
+          .get(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception('Failed to get completions for date');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to get completions for date';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
   // Progress endpoints
   Future<Map<String, dynamic>> getDailyProgress({String? date}) async {
+    final baseUri = Uri.parse('$baseUrl/progress/daily');
+    final uri = date != null ? baseUri.replace(queryParameters: {'date': date}) : baseUri;
     try {
-      final uri = Uri.parse('$baseUrl/progress/daily');
-      final queryUri = date != null ? uri.replace(queryParameters: {'date': date}) : uri;
-      
-      final response = await http.get(
-        queryUri,
-        headers: await _getHeaders(),
-      );
+      final response = await http
+          .get(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception('Failed to get daily progress');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to get daily progress';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
-  Future<Map<String, dynamic>> getWeeklyProgress() async {
+  Future<Map<String, dynamic>> getWeeklyProgress({String? date}) async {
+    final baseUri = Uri.parse('$baseUrl/progress/weekly');
+    final uri = date != null && date.isNotEmpty
+        ? baseUri.replace(queryParameters: {'date': date})
+        : baseUri;
     try {
-      final response = await http.get(
-        Uri.parse('$baseUrl/progress/weekly'),
-        headers: await _getHeaders(),
-      );
+      final response = await http
+          .get(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception('Failed to get weekly progress');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to get weekly progress';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
   Future<Map<String, dynamic>> getMonthlyProgress({int? month, int? year}) async {
+    final queryParameters = <String, String>{};
+    if (month != null) queryParameters['month'] = month.toString();
+    if (year != null) queryParameters['year'] = year.toString();
+
+    final uri = Uri.parse('$baseUrl/progress/monthly')
+        .replace(queryParameters: queryParameters.isNotEmpty ? queryParameters : null);
     try {
-      final queryParameters = <String, String>{};
-      if (month != null) queryParameters['month'] = month.toString();
-      if (year != null) queryParameters['year'] = year.toString();
-
-      final uri = Uri.parse('$baseUrl/progress/monthly')
-          .replace(queryParameters: queryParameters.isNotEmpty ? queryParameters : null);
-
-      final response = await http.get(
-        uri,
-        headers: await _getHeaders(),
-      );
+      final response = await http
+          .get(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception('Failed to get monthly progress');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to get monthly progress';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
@@ -576,12 +702,22 @@ class ApiService {
     final query = <String, String>{'from': from, 'to': to};
     if (group != null && group != 'All Groups') query['group'] = group;
     if (activityId != null && activityId != 'All Activities') query['activity_id'] = activityId;
-    final response = await http.get(
-      Uri.parse('$baseUrl/progress/range').replace(queryParameters: query),
-      headers: await _getHeaders(),
-    );
-    if (response.statusCode == 200) return jsonDecode(response.body);
-    throw Exception('Failed to get historical progress');
+    final uri = Uri.parse('$baseUrl/progress/range').replace(queryParameters: query);
+
+    try {
+      final response = await http
+          .get(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
+
+      if (response.statusCode == 200) return jsonDecode(response.body);
+      final err = jsonDecode(response.body)['error'] ?? 'Failed to get historical progress';
+      throw ApiException(err, statusCode: response.statusCode);
+    } catch (e) {
+      _handleError(e, uri);
+    }
   }
 
   // Chat endpoints
@@ -589,45 +725,51 @@ class ApiService {
     required String message,
     bool includeHistory = false,
   }) async {
+    final uri = Uri.parse('$baseUrl/chat/message');
     try {
-      final response = await http.post(
-        Uri.parse('$baseUrl/chat/message'),
-        headers: await _getHeaders(),
-        body: jsonEncode({
-          'message': message,
-          'includeHistory': includeHistory,
-        }),
-      );
+      final response = await http
+          .post(
+            uri,
+            headers: await _getHeaders(),
+            body: jsonEncode({
+              'message': message,
+              'includeHistory': includeHistory,
+            }),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
         final data = jsonDecode(response.body) as Map<String, dynamic>;
-        throw Exception(data['error'] ?? data['response'] ?? 'Failed to send message');
+        final err = data['error'] ?? data['response'] ?? 'Failed to send message';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 
   Future<Map<String, dynamic>> getChatHistory({int? limit}) async {
+    final queryParameters = limit != null ? {'limit': limit.toString()} : null;
+    final uri = Uri.parse('$baseUrl/chat/history')
+        .replace(queryParameters: queryParameters);
     try {
-      final queryParameters = limit != null ? {'limit': limit.toString()} : null;
-      final uri = Uri.parse('$baseUrl/chat/history')
-          .replace(queryParameters: queryParameters);
-
-      final response = await http.get(
-        uri,
-        headers: await _getHeaders(),
-      );
+      final response = await http
+          .get(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
 
       if (response.statusCode == 200) {
         return jsonDecode(response.body);
       } else {
-        throw Exception('Failed to get chat history');
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to get chat history';
+        throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {
-      rethrow;
+      _handleError(e, uri);
     }
   }
 }

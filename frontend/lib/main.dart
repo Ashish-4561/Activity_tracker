@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
+import 'config/api_config.dart';
 import 'services/auth_service.dart';
 import 'services/activity_service.dart';
 import 'services/api_service.dart';
@@ -13,6 +14,9 @@ void main() async {
   try {
     await dotenv.load(fileName: ".env");
   } catch (_) {}
+
+  await ApiConfig.init();
+  debugPrint('✓ API Base URL configured: ${ApiConfig.getBaseUrl()}');
 
   final supabaseUrl = dotenv.env['SUPABASE_URL']?.trim() ??
       const String.fromEnvironment('SUPABASE_URL', defaultValue: '');

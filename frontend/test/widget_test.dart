@@ -8,7 +8,8 @@ void main() {
       await dotenv.load(fileName: '.env');
     } catch (_) {}
     await tester.pumpWidget(const ActivityTrackerApp());
-    await tester.pump(const Duration(milliseconds: 250));
+    await tester.pump(const Duration(milliseconds: 100));
+    await tester.pumpAndSettle(const Duration(milliseconds: 1500));
 
     expect(find.byType(ActivityTrackerApp), findsOneWidget);
   });

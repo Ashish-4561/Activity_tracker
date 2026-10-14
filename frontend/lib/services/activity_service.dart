@@ -232,6 +232,19 @@ class ActivityService extends ChangeNotifier {
   bool get isGuest => !authService.isLoggedIn;
   bool get hasGuestActivities => isGuest && _activities.isNotEmpty;
 
+  /// Checks if there is any guest activity data stored locally in SharedPreferences
+  Future<bool> hasStoredGuestActivities() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final raw = prefs.getString(_kGuestActivitiesKey);
+      if (raw != null && raw.isNotEmpty) {
+        final List<dynamic> list = jsonDecode(raw);
+        return list.isNotEmpty;
+      }
+    } catch (_) {}
+    return false;
+  }
+
   void _onAuthChanged() {
     clearData();
     if (authService.isLoggedIn) {
@@ -256,7 +269,19 @@ class ActivityService extends ChangeNotifier {
     notifyListeners();
 
     try {
-      final guestActivitiesToMigrate = List<Activity>.from(_activities);
+      final prefs = await SharedPreferences.getInstance();
+      List<Activity> guestActivitiesToMigrate = [];
+      final raw = prefs.getString(_kGuestActivitiesKey);
+      if (raw != null && raw.isNotEmpty) {
+        final List<dynamic> list = jsonDecode(raw);
+        guestActivitiesToMigrate = list
+            .map((item) => Activity.fromJson(Map<String, dynamic>.from(item as Map)))
+            .toList();
+      }
+      if (guestActivitiesToMigrate.isEmpty && _activities.isNotEmpty) {
+        guestActivitiesToMigrate = List<Activity>.from(_activities);
+      }
+
       for (final act in guestActivitiesToMigrate) {
         final res = await apiService.createActivity(
           name: act.name,
@@ -276,6 +301,7 @@ class ActivityService extends ChangeNotifier {
           await apiService.completeActivity(activityId: createdId);
         }
       }
+      await clearGuestData();
       await fetchActivities();
       await fetchDailyProgress();
     } catch (e) {
@@ -837,6 +863,9 @@ class ActivityService extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
     try {
       await apiService.deleteActivity(id);
       _activityProgress.remove(id);
@@ -847,6 +876,9 @@ class ActivityService extends ChangeNotifier {
       _error = e.toString();
       notifyListeners();
       rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
   }
 
@@ -868,6 +900,9 @@ class ActivityService extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
     try {
       await apiService.deleteGroup(groupName);
       final removedIds = _activities
@@ -884,6 +919,9 @@ class ActivityService extends ChangeNotifier {
       _error = e.toString();
       notifyListeners();
       rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
   }
 
@@ -900,6 +938,9 @@ class ActivityService extends ChangeNotifier {
       notifyListeners();
       return;
     }
+    _isLoading = true;
+    _error = null;
+    notifyListeners();
     try {
       await apiService.renameGroup(
         oldGroupName: oldGroupName,
@@ -910,6 +951,9 @@ class ActivityService extends ChangeNotifier {
       _error = e.toString();
       notifyListeners();
       rethrow;
+    } finally {
+      _isLoading = false;
+      notifyListeners();
     }
   }
 

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../config/api_config.dart';
 import '../../services/auth_service.dart';
 import '../../services/activity_service.dart';
 import '../../services/theme_service.dart';
@@ -223,6 +224,72 @@ class _ProfileScreenState extends State<ProfileScreen> {
     );
   }
 
+  void _showServerConfigDialog() {
+    final currentUrl = ApiConfig.getBaseUrl();
+    final controller = TextEditingController(text: currentUrl);
+
+    showDialog(
+      context: context,
+      builder: (dialogCtx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.dns_rounded, size: 22),
+            SizedBox(width: 8),
+            Text('Server Connection', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Backend API URL for activities, sync, and profile. If testing over Wi-Fi and the host IP changed, update it here:',
+              style: TextStyle(fontSize: 13),
+            ),
+            const SizedBox(height: 14),
+            TextField(
+              controller: controller,
+              decoration: InputDecoration(
+                labelText: 'API Base URL',
+                hintText: 'http://172.22.127.126:5000/api',
+                border: OutlineInputBorder(borderRadius: BorderRadius.circular(10)),
+                isDense: true,
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () async {
+              await ApiConfig.setCustomApiUrl(null);
+              if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+              _showMessage('Reset to default URL: ${ApiConfig.getBaseUrl()}');
+              setState(() {});
+            },
+            child: const Text('Reset'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(dialogCtx),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () async {
+              final newUrl = controller.text.trim();
+              if (newUrl.isNotEmpty) {
+                await ApiConfig.setCustomApiUrl(newUrl);
+                if (dialogCtx.mounted) Navigator.pop(dialogCtx);
+                _showMessage('Server URL updated to ${ApiConfig.getBaseUrl()}');
+                setState(() {});
+              }
+            },
+            child: const Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final authService = context.watch<AuthService>();
@@ -350,31 +417,35 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   Row(
                     children: [
                       Expanded(
-                        child: FilledButton(
-                          onPressed: () {
-                            Navigator.of(context).push(
-                              MaterialPageRoute(builder: (_) => const SignupScreen()),
-                            );
-                          },
-                          style: FilledButton.styleFrom(
-                            backgroundColor: AppColors.primary,
-                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                          ),
-                          child: const Text('Create Account'),
-                        ),
-                      ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: OutlinedButton(
+                        child: FilledButton.icon(
                           onPressed: () {
                             Navigator.of(context).push(
                               MaterialPageRoute(builder: (_) => const LoginScreen()),
                             );
                           },
-                          style: OutlinedButton.styleFrom(
+                          icon: const Icon(Icons.login_rounded, size: 18),
+                          label: const Text('Log In', style: TextStyle(fontWeight: FontWeight.bold)),
+                          style: FilledButton.styleFrom(
+                            backgroundColor: AppColors.primary,
+                            padding: const EdgeInsets.symmetric(vertical: 12),
                             shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
                           ),
-                          child: const Text('Log In'),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(builder: (_) => const SignupScreen()),
+                            );
+                          },
+                          icon: const Icon(Icons.person_add_outlined, size: 18),
+                          label: const Text('Sign Up', style: TextStyle(fontWeight: FontWeight.bold)),
+                          style: OutlinedButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(vertical: 12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+                          ),
                         ),
                       ),
                     ],
@@ -476,6 +547,21 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ? (val) => context.read<AuthService>().updateProfile(notificationsEnabled: val)
                       : (val) => AuthPromptDialog.show(context),
                 ),
+                Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder, height: 1, indent: 56),
+                ListTile(
+                  leading: Container(
+                    padding: const EdgeInsets.all(8),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: const Icon(Icons.dns_rounded, color: AppColors.primary, size: 20),
+                  ),
+                  title: const Text('Server Connection', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                  subtitle: Text(ApiConfig.getBaseUrl(), style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary), overflow: TextOverflow.ellipsis),
+                  trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+                  onTap: _showServerConfigDialog,
+                ),
               ],
             ),
           ),
@@ -542,30 +628,51 @@ class _ProfileScreenState extends State<ProfileScreen> {
               ),
             ),
             const SizedBox(height: 36),
+          ],
 
-            // DayTrack Branding Footer
-            Center(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  const DayTrackLogo(
-                    variant: DayTrackLogoVariant.compact,
-                    iconSize: 26,
-                    size: 16,
-                  ),
-                  const SizedBox(height: 6),
-                  Text(
-                    'Version 1.0.0 • Personal Daily Productivity',
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
-                      fontWeight: FontWeight.w500,
-                    ),
-                  ),
-                ],
+          if (isGuest) ...[
+            const SizedBox(height: 28),
+            SizedBox(
+              width: double.infinity,
+              height: 52,
+              child: FilledButton.tonalIcon(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const LoginScreen()),
+                  );
+                },
+                icon: const Icon(Icons.login_rounded, size: 20),
+                label: const Text('Log In to DayTrack Account', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                style: FilledButton.styleFrom(
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
               ),
             ),
+            const SizedBox(height: 36),
           ],
+
+          // DayTrack Branding Footer
+          Center(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const DayTrackLogo(
+                  variant: DayTrackLogoVariant.compact,
+                  iconSize: 26,
+                  size: 16,
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Version 1.0.1 • Personal Daily Productivity',
+                  style: TextStyle(
+                    fontSize: 12,
+                    color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
+                    fontWeight: FontWeight.w500,
+                  ),
+                ),
+              ],
+            ),
+          ),
           const SizedBox(height: 40),
         ],
       ),
