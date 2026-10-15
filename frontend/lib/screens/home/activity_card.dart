@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../services/activity_service.dart';
 import '../../services/theme_service.dart';
 import '../../widgets/neumorphic_card.dart';
+import '../garden/group_garden_screen.dart';
 
 /// A modern soft neomorphic activity card displayed inside the group activities list.
 /// Shows: icon · name · frequency · individual progress bar · current streak · checkbox · three-dot menu.
@@ -359,7 +360,56 @@ class ActivityCard extends StatelessWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 24),
+            if (activity.groupName.trim().isNotEmpty) ...[
+              const SizedBox(height: 14),
+              InkWell(
+                borderRadius: BorderRadius.circular(14),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (_) => GroupGardenScreen(groupName: activity.groupName),
+                    ),
+                  );
+                },
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  decoration: BoxDecoration(
+                    color: isDark ? AppColors.darkSurfaceRaised : const Color(0xFFF0FDF4),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: AppColors.emeraldSuccess.withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: Row(
+                    children: [
+                      const Text('🌸', style: TextStyle(fontSize: 18)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              '${activity.groupName} Garden',
+                              style: const TextStyle(fontWeight: FontWeight.w700, fontSize: 13),
+                            ),
+                            Text(
+                              'Completing this habit earns growth points for this garden',
+                              style: TextStyle(
+                                fontSize: 11,
+                                color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const Icon(Icons.arrow_forward_ios_rounded, size: 12, color: AppColors.emeraldSuccess),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+            const SizedBox(height: 20),
 
             // Streak & Progress Stats Grid
             Row(

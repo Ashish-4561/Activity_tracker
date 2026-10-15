@@ -7,6 +7,7 @@ import 'services/auth_service.dart';
 import 'services/activity_service.dart';
 import 'services/api_service.dart';
 import 'services/theme_service.dart';
+import 'services/garden_service.dart';
 import 'screens/splash/splash_screen.dart';
 
 void main() async {
@@ -54,12 +55,22 @@ class ActivityTrackerApp extends StatelessWidget {
         ChangeNotifierProvider<AuthService>(
           create: (context) => AuthService(context.read<ApiService>()),
         ),
+        ChangeNotifierProvider<GardenService>(
+          create: (context) => GardenService(
+            apiService: context.read<ApiService>(),
+            authService: context.read<AuthService>(),
+          )..fetchGardens(),
+        ),
         ChangeNotifierProvider<ActivityService>(
-          create: (context) => ActivityService(
-            context.read<ApiService>(),
-            context.read<AuthService>(),
-            previewMode: false,
-          ),
+          create: (context) {
+            final actService = ActivityService(
+              context.read<ApiService>(),
+              context.read<AuthService>(),
+              previewMode: false,
+            );
+            actService.setGardenService(context.read<GardenService>());
+            return actService;
+          },
         ),
       ],
       child: Consumer<ThemeService>(

@@ -20,7 +20,7 @@ class ApiException implements Exception {
 class ApiService {
   String get baseUrl => ApiConfig.getBaseUrl();
   static const String _tokenKey = 'auth_token';
-  static const Duration requestTimeout = Duration(seconds: 15);
+  static const Duration requestTimeout = Duration(seconds: 6);
 
   ApiService();
 
@@ -160,6 +160,7 @@ class ApiService {
     String? profileImage,
     String? googleId,
     String? idToken,
+    String? accessToken,
     String? supabaseToken,
   }) async {
     final uri = Uri.parse('$baseUrl/auth/google');
@@ -174,6 +175,7 @@ class ApiService {
               if (profileImage != null) 'profileImage': profileImage,
               if (googleId != null) 'googleId': googleId,
               if (idToken != null) 'idToken': idToken,
+              if (accessToken != null) 'accessToken': accessToken,
               if (supabaseToken != null) 'supabaseToken': supabaseToken,
             }),
           )
@@ -766,6 +768,123 @@ class ApiService {
         return jsonDecode(response.body);
       } else {
         final err = jsonDecode(response.body)['error'] ?? 'Failed to get chat history';
+        throw ApiException(err, statusCode: response.statusCode);
+      }
+    } catch (e) {
+      _handleError(e, uri);
+    }
+  }
+
+  // ── Personal Growth Garden APIs ──────────────────────────────────────────
+
+  /// Fetches all group gardens for the authenticated user
+  Future<Map<String, dynamic>> getGardens() async {
+    final uri = Uri.parse('$baseUrl/gardens');
+    try {
+      final response = await http
+          .get(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to get group gardens';
+        throw ApiException(err, statusCode: response.statusCode);
+      }
+    } catch (e) {
+      _handleError(e, uri);
+    }
+  }
+
+  /// Fetches the garden for a specific group by ID
+  Future<Map<String, dynamic>> getGardenById(String groupId) async {
+    final encoded = Uri.encodeComponent(groupId);
+    final uri = Uri.parse('$baseUrl/gardens/$encoded');
+    try {
+      final response = await http
+          .get(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to get group garden';
+        throw ApiException(err, statusCode: response.statusCode);
+      }
+    } catch (e) {
+      _handleError(e, uri);
+    }
+  }
+
+  /// Creates or retrieves a group with its personal garden
+  Future<Map<String, dynamic>> createOrGetGroup(String name) async {
+    final uri = Uri.parse('$baseUrl/gardens/group');
+    try {
+      final response = await http
+          .post(
+            uri,
+            headers: await _getHeaders(),
+            body: jsonEncode({'name': name}),
+          )
+          .timeout(requestTimeout);
+
+      if (response.statusCode == 200 || response.statusCode == 201) {
+        return jsonDecode(response.body);
+      } else {
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to create group';
+        throw ApiException(err, statusCode: response.statusCode);
+      }
+    } catch (e) {
+      _handleError(e, uri);
+    }
+  }
+
+  /// Renames a group while keeping its group ID and attached garden intact
+  Future<Map<String, dynamic>> renameGroupWithGarden(String groupId, String newName) async {
+    final encoded = Uri.encodeComponent(groupId);
+    final uri = Uri.parse('$baseUrl/gardens/group/$encoded/rename');
+    try {
+      final response = await http
+          .put(
+            uri,
+            headers: await _getHeaders(),
+            body: jsonEncode({'newGroupName': newName}),
+          )
+          .timeout(requestTimeout);
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to rename group';
+        throw ApiException(err, statusCode: response.statusCode);
+      }
+    } catch (e) {
+      _handleError(e, uri);
+    }
+  }
+
+  /// Deletes a group and handles its attached garden
+  Future<Map<String, dynamic>> deleteGroupWithGarden(String groupId) async {
+    final encoded = Uri.encodeComponent(groupId);
+    final uri = Uri.parse('$baseUrl/gardens/group/$encoded');
+    try {
+      final response = await http
+          .delete(
+            uri,
+            headers: await _getHeaders(),
+          )
+          .timeout(requestTimeout);
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to delete group';
         throw ApiException(err, statusCode: response.statusCode);
       }
     } catch (e) {

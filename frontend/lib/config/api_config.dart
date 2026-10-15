@@ -1,6 +1,7 @@
 import 'dart:io' show Platform;
 import 'package:flutter/foundation.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
+import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 /// Centralized API configuration for DayTrack.
@@ -23,6 +24,18 @@ class ApiConfig {
 
   /// Default local development port
   static const int defaultPort = 5000;
+
+  /// Fast health check against candidate backend base URL
+  static Future<bool> isUrlHealthy(String url) async {
+    try {
+      final normalized = _normalizeUrl(url);
+      final healthUri = Uri.parse('$normalized/health');
+      final res = await http.get(healthUri).timeout(const Duration(milliseconds: 1500));
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
+  }
 
   /// Returns the centralized API base URL.
   static String getBaseUrl() {
@@ -51,19 +64,61 @@ class ApiConfig {
     return _cachedBaseUrl!;
   }
 
-  /// Refreshes and initializes with potential SharedPreferences override.
+  /// Refreshes and initializes with intelligent fast auto-discovery.
   static Future<String> init() async {
+    // 1. Build-time override
+    if (_dartDefineApiUrl.isNotEmpty) {
+      _cachedBaseUrl = _normalizeUrl(_dartDefineApiUrl);
+      return _cachedBaseUrl!;
+    }
+
+    final prefs = await SharedPreferences.getInstance();
+    final customUrl = prefs.getString(_tokenPrefKey)?.trim();
+
+    final envUrl = dotenv.env['API_URL']?.trim() ??
+        dotenv.env['PROD_API_URL']?.trim() ??
+        dotenv.env['BACKEND_URL']?.trim() ??
+        '';
+
+    final candidates = <String>[];
+    if (envUrl.isNotEmpty) {
+      candidates.add(_resolveForPlatform(envUrl));
+    }
+    // Add current active LAN IP candidate
+    candidates.add('http://172.23.131.82:$defaultPort/api');
+    candidates.add(defaultPlatformUrl);
+
+    if (customUrl != null && customUrl.isNotEmpty) {
+      candidates.insert(0, _resolveForPlatform(customUrl));
+    }
+
+    final uniqueCandidates = candidates.toSet().toList();
+
+    // Check candidates in parallel with 1500ms timeout
     try {
-      final prefs = await SharedPreferences.getInstance();
-      final customUrl = prefs.getString(_tokenPrefKey)?.trim();
+      final healthyUrl = await Future.any(
+        uniqueCandidates.map((url) async {
+          final ok = await isUrlHealthy(url);
+          if (ok) return url;
+          throw Exception('unhealthy');
+        }),
+      );
+      _cachedBaseUrl = healthyUrl;
+      if (customUrl != null && customUrl != healthyUrl) {
+        await prefs.remove(_tokenPrefKey);
+      }
+      return healthyUrl;
+    } catch (_) {
+      // Fallback without blocking when offline
       if (customUrl != null && customUrl.isNotEmpty) {
         _cachedBaseUrl = _resolveForPlatform(customUrl);
-        return _cachedBaseUrl!;
+      } else if (envUrl.isNotEmpty) {
+        _cachedBaseUrl = _resolveForPlatform(envUrl);
+      } else {
+        _cachedBaseUrl = defaultPlatformUrl;
       }
-    } catch (_) {}
-
-    _cachedBaseUrl = null; // force re-evaluate
-    return getBaseUrl();
+      return _cachedBaseUrl!;
+    }
   }
 
   /// Sets a runtime custom server override (useful for mobile network testing).

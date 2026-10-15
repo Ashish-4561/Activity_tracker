@@ -223,9 +223,34 @@ async function createPostgresTables(pool: Pool): Promise<void> {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS activity_groups (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      CONSTRAINT uq_user_group_name UNIQUE (user_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS group_gardens (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL REFERENCES activity_groups(id) ON DELETE CASCADE,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      growth_points INTEGER DEFAULT 0,
+      level INTEGER DEFAULT 1,
+      unlocked_plants TEXT DEFAULT '[]',
+      milestones TEXT DEFAULT '[]',
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      CONSTRAINT uq_user_group_garden UNIQUE (user_id, group_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_users_auth_user_id ON users(auth_user_id);
     CREATE INDEX IF NOT EXISTS idx_activities_user_id ON activities(user_id);
     CREATE INDEX IF NOT EXISTS idx_activities_user_active ON activities(user_id, is_active);
+    CREATE INDEX IF NOT EXISTS idx_activity_groups_user_id ON activity_groups(user_id);
+    CREATE INDEX IF NOT EXISTS idx_group_gardens_group_id ON group_gardens(group_id);
+    CREATE INDEX IF NOT EXISTS idx_group_gardens_user_id ON group_gardens(user_id);
     CREATE INDEX IF NOT EXISTS idx_activity_completions_user_id ON activity_completions(user_id);
     CREATE INDEX IF NOT EXISTS idx_activity_completions_activity_id ON activity_completions(activity_id);
     CREATE INDEX IF NOT EXISTS idx_activity_completions_date ON activity_completions(date);
@@ -328,7 +353,35 @@ async function createSqliteTables(db: SqliteDatabase): Promise<void> {
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
 
+    CREATE TABLE IF NOT EXISTS activity_groups (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id, name)
+    );
+
+    CREATE TABLE IF NOT EXISTS group_gardens (
+      id TEXT PRIMARY KEY,
+      group_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      growth_points INTEGER DEFAULT 0,
+      level INTEGER DEFAULT 1,
+      unlocked_plants TEXT DEFAULT '[]',
+      milestones TEXT DEFAULT '[]',
+      created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (group_id) REFERENCES activity_groups(id) ON DELETE CASCADE,
+      FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+      UNIQUE(user_id, group_id)
+    );
+
     CREATE INDEX IF NOT EXISTS idx_activities_user_id ON activities(user_id);
+    CREATE INDEX IF NOT EXISTS idx_activity_groups_user_id ON activity_groups(user_id);
+    CREATE INDEX IF NOT EXISTS idx_group_gardens_group_id ON group_gardens(group_id);
+    CREATE INDEX IF NOT EXISTS idx_group_gardens_user_id ON group_gardens(user_id);
     CREATE INDEX IF NOT EXISTS idx_activity_completions_user_id ON activity_completions(user_id);
     CREATE INDEX IF NOT EXISTS idx_activity_completions_activity_id ON activity_completions(activity_id);
     CREATE INDEX IF NOT EXISTS idx_activity_completions_date ON activity_completions(date);

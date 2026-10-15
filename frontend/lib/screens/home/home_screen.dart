@@ -28,7 +28,6 @@ class _HomeScreenState extends State<HomeScreen> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (widget.previewMode) return;
       context.read<ActivityService>().fetchActivities();
-      context.read<ActivityService>().fetchDailyProgress();
     });
   }
 
@@ -58,7 +57,6 @@ class _HomeScreenState extends State<HomeScreen> {
           final actService = context.read<ActivityService>();
           actService.checkDayRollover();
           await actService.fetchActivities();
-          await actService.fetchDailyProgress();
         },
         child: SingleChildScrollView(
           child: Padding(

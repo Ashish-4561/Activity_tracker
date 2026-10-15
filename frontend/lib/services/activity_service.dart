@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
 import 'auth_service.dart';
+import 'garden_service.dart';
 
 class Activity {
   final String id;
@@ -124,6 +125,11 @@ class ActivityService extends ChangeNotifier {
   final ApiService apiService;
   final AuthService authService;
   final bool previewMode;
+  GardenService? gardenService;
+
+  void setGardenService(GardenService gs) {
+    gardenService = gs;
+  }
 
   List<Activity> _activities = [];
   DailyProgress? _dailyProgress;
@@ -149,6 +155,7 @@ class ActivityService extends ChangeNotifier {
   static const String _kGuestCompletionsKey = 'guest_local_completions_v2';
   static const String _kGuestInitializedKey = 'guest_local_initialized_v1';
 
+  bool _isFetchingActivities = false;
   Map<String, bool> _guestCompletions = {};
   String _currentDate = DateTime.now().toIso8601String().split('T').first;
   Timer? _dayCheckTimer;
@@ -162,7 +169,6 @@ class ActivityService extends ChangeNotifier {
     authService.addListener(_onAuthChanged);
     if (authService.isLoggedIn) {
       fetchActivities();
-      fetchDailyProgress();
     } else {
       _loadGuestActivitiesFromStorage();
     }
@@ -253,7 +259,6 @@ class ActivityService extends ChangeNotifier {
         _loadUserActivitiesFromStorage(userId);
       }
       fetchActivities();
-      fetchDailyProgress();
     } else {
       // User logged out: clear memory and ensure guest mode has no lingering user tasks
       _activities = [];
@@ -377,6 +382,9 @@ class ActivityService extends ChangeNotifier {
       await _loadGuestActivitiesFromStorage();
       return;
     }
+    if (_isFetchingActivities) return;
+    _isFetchingActivities = true;
+
     final currentUserId = authService.currentUser?.id;
     _isLoading = true;
     _error = null;
@@ -385,8 +393,15 @@ class ActivityService extends ChangeNotifier {
     try {
       final targetDate = date ?? _todayDateString();
       _currentDate = targetDate;
-      final response = await apiService.getActivities(date: targetDate);
-      final completionsRes = await apiService.getCompletionsByDate(date: targetDate).catchError((_) => <String, dynamic>{});
+
+      // Parallelize fetching activities and completions for maximum speed
+      final results = await Future.wait([
+        apiService.getActivities(date: targetDate),
+        apiService.getCompletionsByDate(date: targetDate).catchError((_) => <String, dynamic>{}),
+      ]);
+      final response = results[0];
+      final completionsRes = results[1];
+
       final completedMap = <String, bool>{};
       final completionsList = completionsRes['completions'] as List? ?? [];
       for (final c in completionsList) {
@@ -399,8 +414,14 @@ class ActivityService extends ChangeNotifier {
       _activities = (response['activities'] as List?)
               ?.map((json) {
                 final act = Activity.fromJson(json);
+                final isLocallyCompleted = _guestCompletions['${act.id}:$targetDate'] == true;
                 if (completedMap.containsKey(act.id)) {
-                  act.isCompleted = completedMap[act.id] ?? false;
+                  act.isCompleted = completedMap[act.id] ?? isLocallyCompleted;
+                  if (completedMap[act.id] == true) {
+                    _guestCompletions['${act.id}:$targetDate'] = true;
+                  }
+                } else {
+                  act.isCompleted = isLocallyCompleted;
                 }
                 return act;
               })
@@ -411,8 +432,12 @@ class ActivityService extends ChangeNotifier {
       }
       _isLoading = false;
       notifyListeners();
-      await fetchActivityProgress();
-      await fetchDailyProgress(date: targetDate);
+
+      // Parallelize streaks and daily progress
+      await Future.wait([
+        fetchActivityProgress(),
+        fetchDailyProgress(date: targetDate),
+      ]);
     } catch (e) {
       if (currentUserId != null && currentUserId.isNotEmpty) {
         await _loadUserActivitiesFromStorage(currentUserId);
@@ -421,6 +446,8 @@ class ActivityService extends ChangeNotifier {
       }
       _isLoading = false;
       notifyListeners();
+    } finally {
+      _isFetchingActivities = false;
     }
   }
 
@@ -897,6 +924,7 @@ class ActivityService extends ChangeNotifier {
       _updatePreviewProgress();
       _rebuildPreviewProgress();
       await _saveGuestActivitiesToStorage();
+      await gardenService?.handleGroupDeleted(groupName);
       notifyListeners();
       return;
     }
@@ -914,6 +942,7 @@ class ActivityService extends ChangeNotifier {
         _activityStreaks.remove(id);
         _activityBestStreaks.remove(id);
       }
+      await gardenService?.handleGroupDeleted(groupName);
       await fetchActivities();
     } catch (e) {
       _error = e.toString();
@@ -935,6 +964,7 @@ class ActivityService extends ChangeNotifier {
       _updatePreviewProgress();
       _rebuildGroupProgress();
       await _saveGuestActivitiesToStorage();
+      await gardenService?.handleGroupRenamed(oldGroupName, newGroupName);
       notifyListeners();
       return;
     }
@@ -946,6 +976,7 @@ class ActivityService extends ChangeNotifier {
         oldGroupName: oldGroupName,
         newGroupName: newGroupName,
       );
+      await gardenService?.handleGroupRenamed(oldGroupName, newGroupName);
       await fetchActivities();
     } catch (e) {
       _error = e.toString();
@@ -988,6 +1019,27 @@ class ActivityService extends ChangeNotifier {
       } else {
         await _saveGuestActivitiesToStorage();
       }
+
+      // Live update personal growth garden for this specific activity group
+      final actGroup = _activities[index].groupName.trim();
+      if (actGroup.isNotEmpty) {
+        if (isGuest || previewMode) {
+          final groupCompletions = _activities
+              .where((a) =>
+                  a.groupName.trim().toLowerCase() == actGroup.toLowerCase() &&
+                  a.isCompleted)
+              .length;
+          final cStreak = _groupStreaks[actGroup] ?? 0;
+          final bStreak = _groupBestStreaks[actGroup] ?? 0;
+          gardenService?.updateGuestGardenProgress(
+            groupName: actGroup,
+            completedCount: groupCompletions,
+            currentStreak: cStreak,
+            bestStreak: bStreak,
+          );
+        }
+      }
+
       notifyListeners();
     }
 
@@ -1000,6 +1052,8 @@ class ActivityService extends ChangeNotifier {
         await apiService.uncompleteActivity(activityId: activityId, date: targetDate);
       }
       await fetchDailyProgress(date: targetDate);
+      // Refresh gardens from backend after verified completion
+      gardenService?.fetchGardens();
       notifyListeners();
     } catch (e) {
       // Keep local completion in user storage if backend is unreachable

@@ -231,9 +231,10 @@ class _ProfileScreenState extends State<ProfileScreen> {
     final theme = Theme.of(context);
     final isDark = theme.brightness == Brightness.dark;
 
+    final isLoggedIn = authService.isLoggedIn;
     final isGuest = authService.isGuest;
-    final displayName = user?.name ?? 'Guest Explorer';
-    final identifier = user?.email ?? user?.phone ?? (isGuest ? 'Guest Trial Mode (2 Days)' : 'Encrypted Cloud Profile');
+    final displayName = user?.name ?? (isLoggedIn ? 'User' : 'Guest Explorer');
+    final identifier = user?.email ?? user?.phone ?? (isLoggedIn ? 'Cloud Profile' : 'Guest Mode (Offline)');
 
     return Scaffold(
       appBar: AppBar(
@@ -270,7 +271,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                         ],
                       ),
                       child: Center(
-                        child: isGuest
+                        child: !isLoggedIn
                             ? const Icon(Icons.explore_rounded, size: 30, color: Colors.white)
                             : Text(
                                 displayName.isNotEmpty ? displayName.substring(0, 1).toUpperCase() : 'U',
@@ -335,7 +336,7 @@ class _ProfileScreenState extends State<ProfileScreen> {
                       ),
                   ],
                 ),
-                if (isGuest) ...[
+                if (!isLoggedIn) ...[
                   const SizedBox(height: 18),
                   Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder, height: 1),
                   const SizedBox(height: 12),
@@ -536,10 +537,15 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   final activity = context.read<ActivityService>();
                   await auth.logout();
                   activity.clearData();
-                  _showMessage('Signed out. You are now in Guest Mode.');
+                  if (context.mounted) {
+                    Navigator.of(context).pushAndRemoveUntil(
+                      MaterialPageRoute(builder: (_) => const LoginScreen()),
+                      (route) => false,
+                    );
+                  }
                 },
                 icon: const Icon(Icons.logout_rounded, size: 18),
-                label: const Text('Sign Out (Return to Guest Mode)', style: TextStyle(fontWeight: FontWeight.w700)),
+                label: const Text('Sign Out', style: TextStyle(fontWeight: FontWeight.w700)),
                 style: OutlinedButton.styleFrom(
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
@@ -548,20 +554,39 @@ class _ProfileScreenState extends State<ProfileScreen> {
             const SizedBox(height: 36),
           ],
 
-          if (isGuest) ...[
+          if (!isLoggedIn) ...[
             const SizedBox(height: 28),
             SizedBox(
               width: double.infinity,
               height: 52,
-              child: FilledButton.tonalIcon(
+              child: FilledButton.icon(
                 onPressed: () {
-                  Navigator.of(context).push(
+                  Navigator.of(context).pushAndRemoveUntil(
                     MaterialPageRoute(builder: (_) => const LoginScreen()),
+                    (route) => false,
                   );
                 },
                 icon: const Icon(Icons.login_rounded, size: 20),
                 label: const Text('Log In to DayTrack Account', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
                 style: FilledButton.styleFrom(
+                  backgroundColor: AppColors.primary,
+                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                ),
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              height: 50,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(builder: (_) => const SignupScreen()),
+                  );
+                },
+                icon: const Icon(Icons.person_add_outlined, size: 18),
+                label: const Text('Create New Account', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                style: OutlinedButton.styleFrom(
                   shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                 ),
               ),

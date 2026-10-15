@@ -274,7 +274,7 @@ export async function deleteAccount(req: AuthRequest, res: Response): Promise<vo
 
 export async function googleAuth(req: AuthRequest, res: Response): Promise<void> {
   try {
-    const { email, name, profileImage, googleId, idToken, supabaseToken } = req.body;
+    const { email, name, profileImage, googleId, idToken, accessToken, supabaseToken } = req.body;
     const authHeader = req.headers.authorization;
     const bearerToken = authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : null;
     const tokenToVerify = supabaseToken || bearerToken;
@@ -296,12 +296,12 @@ export async function googleAuth(req: AuthRequest, res: Response): Promise<void>
           verifiedName = authUser.user_metadata?.full_name || authUser.user_metadata?.name || verifiedName;
           verifiedPicture = authUser.user_metadata?.avatar_url || authUser.user_metadata?.picture || verifiedPicture;
           authUserId = authUser.id;
-        } else if (isProduction && !idToken) {
+        } else if (isProduction && !idToken && !accessToken) {
           res.status(401).json({ error: 'Invalid or expired Supabase authentication token' });
           return;
         }
       } catch (err) {
-        if (isProduction && !idToken) {
+        if (isProduction && !idToken && !accessToken) {
           res.status(401).json({ error: 'Supabase token verification failed' });
           return;
         }
@@ -317,13 +317,36 @@ export async function googleAuth(req: AuthRequest, res: Response): Promise<void>
             verifiedName = payload.name || verifiedName;
             verifiedPicture = payload.picture || verifiedPicture;
           }
-        } else if (isProduction) {
+        } else if (isProduction && !accessToken) {
           res.status(401).json({ error: 'Invalid Google ID token' });
           return;
         }
       } catch (err) {
-        if (isProduction) {
+        if (isProduction && !accessToken) {
           res.status(401).json({ error: 'Failed to verify Google ID token' });
+          return;
+        }
+      }
+    } else if (accessToken) {
+      // 3. Verify Google accessToken via Google userinfo
+      try {
+        const verifyRes = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+        if (verifyRes.ok) {
+          const payload = await verifyRes.json() as any;
+          if (payload.email) {
+            verifiedEmail = payload.email;
+            verifiedName = payload.name || verifiedName;
+            verifiedPicture = payload.picture || verifiedPicture;
+          }
+        } else if (isProduction) {
+          res.status(401).json({ error: 'Invalid Google access token' });
+          return;
+        }
+      } catch (err) {
+        if (isProduction) {
+          res.status(401).json({ error: 'Failed to verify Google access token' });
           return;
         }
       }
