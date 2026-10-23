@@ -386,9 +386,14 @@ class ActivityService extends ChangeNotifier {
     _isFetchingActivities = true;
 
     final currentUserId = authService.currentUser?.id;
-    _isLoading = true;
+    if (_activities.isEmpty && currentUserId != null && currentUserId.isNotEmpty) {
+      await _loadUserActivitiesFromStorage(currentUserId);
+    }
+    if (_activities.isEmpty) {
+      _isLoading = true;
+      notifyListeners();
+    }
     _error = null;
-    notifyListeners();
 
     try {
       final targetDate = date ?? _todayDateString();
@@ -435,14 +440,12 @@ class ActivityService extends ChangeNotifier {
 
       // Parallelize streaks and daily progress
       await Future.wait([
-        fetchActivityProgress(),
-        fetchDailyProgress(date: targetDate),
+        fetchActivityProgress().catchError((_) {}),
+        fetchDailyProgress(date: targetDate).catchError((_) {}),
       ]);
     } catch (e) {
-      if (currentUserId != null && currentUserId.isNotEmpty) {
+      if (currentUserId != null && currentUserId.isNotEmpty && _activities.isEmpty) {
         await _loadUserActivitiesFromStorage(currentUserId);
-      } else {
-        _activities = [];
       }
       _isLoading = false;
       notifyListeners();
@@ -461,7 +464,15 @@ class ActivityService extends ChangeNotifier {
       _dailyProgress = DailyProgress.fromJson(response);
       notifyListeners();
     } catch (e) {
-      _error = e.toString();
+      final total = _activities.length;
+      final completed = _activities.where((a) => a.isCompleted).length;
+      final percentage = total > 0 ? ((completed / total) * 100).round() : 0;
+      _dailyProgress = DailyProgress(
+        date: date ?? _currentDate,
+        completed: completed,
+        total: total,
+        percentage: percentage,
+      );
       notifyListeners();
     }
   }
@@ -521,6 +532,25 @@ class ActivityService extends ChangeNotifier {
       _overallCurrentStreak = response['current_streak'] as int? ?? 0;
       _overallBestStreak = response['best_streak'] as int? ?? 0;
       _overallWeeklyProgress = response['average_daily_percentage'] as int? ?? 0;
+
+      // Populate local completion cache with all historical records from server
+      final completionsList = response['completion_history'] as List? ?? [];
+      for (final c in completionsList) {
+        if (c is Map && c['activity_id'] != null && c['date'] != null) {
+          final actId = c['activity_id'].toString();
+          final d = c['date'].toString().split('T').first;
+          final isComp = c['completed'] == true || c['completed'] == 1;
+          if (isComp) {
+            _guestCompletions['$actId:$d'] = true;
+          } else {
+            _guestCompletions.remove('$actId:$d');
+          }
+        }
+      }
+      final currentUserId = authService.currentUser?.id;
+      if (currentUserId != null && currentUserId.isNotEmpty) {
+        _saveUserActivitiesToStorage(currentUserId);
+      }
 
       _rebuildGroupProgress();
 
@@ -990,29 +1020,39 @@ class ActivityService extends ChangeNotifier {
 
   Future<void> toggleActivityCompletion(String activityId, bool isCompleted, {String? date}) async {
     final targetDate = date ?? _todayDateString();
+    final isToday = targetDate == _todayDateString();
+    if (!isToday) {
+      debugPrint('Restriction: Cannot modify activity completion for dates other than today ($targetDate)');
+      return;
+    }
     _currentDate = targetDate;
+
     // 1. Snappy optimistic update
     final index = _activities.indexWhere((a) => a.id == activityId);
     if (index != -1) {
-      _activities[index].isCompleted = isCompleted;
-      _activityProgress[activityId] = isCompleted ? 100 : 0;
-      if (isCompleted) {
-        _activityStreaks[activityId] = (_activityStreaks[activityId] ?? 0) + 1;
-        if ((_activityStreaks[activityId] ?? 0) > (_activityBestStreaks[activityId] ?? 0)) {
-          _activityBestStreaks[activityId] = _activityStreaks[activityId]!;
+      if (isToday) {
+        _activities[index].isCompleted = isCompleted;
+        _activityProgress[activityId] = isCompleted ? 100 : 0;
+        if (isCompleted) {
+          _activityStreaks[activityId] = (_activityStreaks[activityId] ?? 0) + 1;
+          if ((_activityStreaks[activityId] ?? 0) > (_activityBestStreaks[activityId] ?? 0)) {
+            _activityBestStreaks[activityId] = _activityStreaks[activityId]!;
+          }
+        } else {
+          if ((_activityStreaks[activityId] ?? 0) > 0) {
+            _activityStreaks[activityId] = (_activityStreaks[activityId]! - 1);
+          }
         }
-      } else {
-        if ((_activityStreaks[activityId] ?? 0) > 0) {
-          _activityStreaks[activityId] = (_activityStreaks[activityId]! - 1);
-        }
+        _updatePreviewProgress();
+        _rebuildGroupProgress();
       }
-      _updatePreviewProgress();
-      _rebuildGroupProgress();
+
       if (isCompleted) {
         _guestCompletions['$activityId:$targetDate'] = true;
       } else {
         _guestCompletions.remove('$activityId:$targetDate');
       }
+
       final currentUserId = authService.currentUser?.id;
       if (currentUserId != null && currentUserId.isNotEmpty) {
         await _saveUserActivitiesToStorage(currentUserId);
@@ -1027,7 +1067,7 @@ class ActivityService extends ChangeNotifier {
           final groupCompletions = _activities
               .where((a) =>
                   a.groupName.trim().toLowerCase() == actGroup.toLowerCase() &&
-                  a.isCompleted)
+                  (isToday ? a.isCompleted : (_guestCompletions['${a.id}:$targetDate'] == true)))
               .length;
           final cStreak = _groupStreaks[actGroup] ?? 0;
           final bStreak = _groupBestStreaks[actGroup] ?? 0;
@@ -1051,7 +1091,9 @@ class ActivityService extends ChangeNotifier {
       } else {
         await apiService.uncompleteActivity(activityId: activityId, date: targetDate);
       }
-      await fetchDailyProgress(date: targetDate);
+      if (isToday) {
+        await fetchDailyProgress(date: targetDate);
+      }
       // Refresh gardens from backend after verified completion
       gardenService?.fetchGardens();
       notifyListeners();
@@ -1059,6 +1101,18 @@ class ActivityService extends ChangeNotifier {
       // Keep local completion in user storage if backend is unreachable
       debugPrint('Sync completion to backend skipped: $e');
     }
+  }
+
+  /// Checks if an activity was completed on a specific date (defaults to today)
+  bool isActivityCompletedOnDate(String activityId, String date) {
+    if (_guestCompletions.containsKey('$activityId:$date')) {
+      return _guestCompletions['$activityId:$date'] == true;
+    }
+    if (date == _todayDateString()) {
+      final index = _activities.indexWhere((a) => a.id == activityId);
+      if (index != -1) return _activities[index].isCompleted;
+    }
+    return false;
   }
 
   void _updatePreviewProgress() {

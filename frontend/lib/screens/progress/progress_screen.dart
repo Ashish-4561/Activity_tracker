@@ -1,6 +1,9 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:table_calendar/table_calendar.dart';
 import '../../services/activity_service.dart';
 import '../../services/api_service.dart';
 import '../../services/auth_service.dart';
@@ -27,6 +30,8 @@ class _ProgressScreenState extends State<ProgressScreen> {
     'Custom Range',
   ];
 
+  static const String _kMatrixCacheKey = 'daytrack_matrix_completions_cache_v2';
+
   String _selectedPreset = 'Last 7 Days';
   String _selectedGroup = 'All Groups';
   DateTimeRange? _customRange;
@@ -35,6 +40,12 @@ class _ProgressScreenState extends State<ProgressScreen> {
 
   bool _loading = true;
   String? _errorMessage;
+
+  // Calendar state
+  DateTime _focusedDay = DateTime.now();
+  DateTime _selectedCalendarDay = DateTime.now();
+  CalendarFormat _calendarFormat = CalendarFormat.twoWeeks;
+  bool _calendarExpanded = true;
 
   // Data cache
   List<Activity> _userActivities = [];
@@ -46,6 +57,8 @@ class _ProgressScreenState extends State<ProgressScreen> {
   void initState() {
     super.initState();
     _currentEndDate = _dateOnly(DateTime.now());
+    _selectedCalendarDay = _currentEndDate;
+    _focusedDay = _currentEndDate;
     _rangeDays = 7;
     _loadData();
   }
@@ -151,44 +164,104 @@ class _ProgressScreenState extends State<ProgressScreen> {
     _loadData();
   }
 
+  Future<void> _loadCachedLocalData() async {
+    try {
+      final activityService = context.read<ActivityService>();
+      _userActivities = List.from(activityService.activities);
+
+      final compMap = <String, Set<String>>{};
+      for (final act in _userActivities) {
+        compMap[act.id] = <String>{};
+      }
+
+      // 1. Pull from activity service in-memory guest/local history
+      final serviceHistory = activityService.getGuestCompletionHistory();
+      for (final entry in serviceHistory.entries) {
+        compMap.putIfAbsent(entry.key, () => <String>{}).addAll(entry.value);
+      }
+
+      // 2. Pull from persistent matrix cache
+      final prefs = await SharedPreferences.getInstance();
+      final rawCache = prefs.getString(_kMatrixCacheKey);
+      if (rawCache != null && rawCache.isNotEmpty) {
+        final Map<String, dynamic> decoded = jsonDecode(rawCache);
+        for (final entry in decoded.entries) {
+          if (entry.value is List) {
+            final datesList = (entry.value as List).map((e) => e.toString()).toSet();
+            compMap.putIfAbsent(entry.key, () => <String>{}).addAll(datesList);
+          }
+        }
+      }
+
+      _completedDatesByActivity = compMap;
+    } catch (_) {}
+  }
+
+  Future<void> _saveCompletionsToCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      final exported = <String, List<String>>{};
+      for (final entry in _completedDatesByActivity.entries) {
+        exported[entry.key] = entry.value.toList();
+      }
+      await prefs.setString(_kMatrixCacheKey, jsonEncode(exported));
+    } catch (_) {}
+  }
+
   Future<void> _loadData() async {
-    setState(() {
-      _loading = true;
-      _errorMessage = null;
-    });
+    final activityService = context.read<ActivityService>();
+    final authService = context.read<AuthService>();
+    final apiService = context.read<ApiService>();
+
+    // Instant rendering with cached data to eliminate loading delays
+    await _loadCachedLocalData();
+    if (!mounted) return;
+
+    if (_userActivities.isNotEmpty) {
+      setState(() {
+        _loading = false;
+        _errorMessage = null;
+      });
+    }
 
     final range = _computeActiveRange();
     final fromStr = _formatDate(range.start);
     final toStr = _formatDate(range.end);
 
-    final activityService = context.read<ActivityService>();
-
     try {
-      final authService = context.read<AuthService>();
-      final apiService = context.read<ApiService>();
 
       if (!authService.isLoggedIn || widget.previewMode) {
-        _userActivities = activityService.activities;
+        _userActivities = List.from(activityService.activities);
         final history = activityService.getGuestCompletionHistory();
         final compMap = <String, Set<String>>{};
         for (final act in _userActivities) {
           compMap[act.id] = Set<String>.from(history[act.id] ?? <String>{});
+          if (_completedDatesByActivity.containsKey(act.id)) {
+            compMap[act.id]!.addAll(_completedDatesByActivity[act.id]!);
+          }
         }
         _completedDatesByActivity = compMap;
+        await _saveCompletionsToCache();
       } else {
-        final response = await apiService.getRangeProgress(
-          from: fromStr,
-          to: toStr,
-          group: _selectedGroup == 'All Groups' ? null : _selectedGroup,
-        );
+        // Parallelize API queries for maximum performance
+        final results = await Future.wait([
+          apiService.getRangeProgress(
+            from: fromStr,
+            to: toStr,
+            group: _selectedGroup == 'All Groups' ? null : _selectedGroup,
+          ),
+          apiService.getActivities(),
+        ]);
 
-        final actRes = await apiService.getActivities();
+        final response = results[0];
+        final actRes = results[1];
+
         final rawList = actRes['activities'] as List? ?? [];
         _userActivities = rawList.map((j) => Activity.fromJson(j)).toList();
 
         final compMap = <String, Set<String>>{};
         for (final act in _userActivities) {
-          compMap[act.id] = {};
+          compMap[act.id] = Set<String>.from(_completedDatesByActivity[act.id] ?? <String>{});
         }
 
         final completionsList = response['completion_history'] as List? ?? [];
@@ -196,26 +269,27 @@ class _ProgressScreenState extends State<ProgressScreen> {
           if (c is Map && c['activity_id'] != null && c['date'] != null) {
             final actId = c['activity_id'].toString();
             final date = c['date'].toString().split('T').first;
-            final isComp = c['completed'] == 1 || c['completed'] == true;
+            final isComp = c['completed'] == 1 || c['completed'] == true || c['completed'] == 'true';
             if (isComp) {
-              compMap.putIfAbsent(actId, () => {}).add(date);
+              compMap.putIfAbsent(actId, () => <String>{}).add(date);
+            } else {
+              compMap[actId]?.remove(date);
             }
           }
         }
         _completedDatesByActivity = compMap;
+        await _saveCompletionsToCache();
       }
     } catch (e) {
-      // Graceful fallback when backend is unreachable (e.g. mobile accessing localhost:5000)
-      _userActivities = activityService.activities;
+      // Offline fallback: Preserve all locally tracked data
+      _userActivities = List.from(activityService.activities);
       final history = activityService.getGuestCompletionHistory();
-      final compMap = <String, Set<String>>{};
       for (final act in _userActivities) {
-        compMap[act.id] = Set<String>.from(history[act.id] ?? <String>{});
+        _completedDatesByActivity.putIfAbsent(act.id, () => <String>{}).addAll(history[act.id] ?? <String>{});
         if (act.isCompleted) {
-          compMap[act.id]!.add(_formatDate(_dateOnly(DateTime.now())));
+          _completedDatesByActivity[act.id]!.add(_formatDate(_dateOnly(DateTime.now())));
         }
       }
-      _completedDatesByActivity = compMap;
       _errorMessage = null;
     } finally {
       if (mounted) {
@@ -224,13 +298,91 @@ class _ProgressScreenState extends State<ProgressScreen> {
     }
   }
 
+  void _showRestrictedDateMessage(DateTime date) {
+    if (!mounted) return;
+    final now = _dateOnly(DateTime.now());
+    final target = _dateOnly(date);
+    final String message;
+    if (target.isBefore(now)) {
+      message = 'Cannot edit previous days. You can only update today\'s tasks.';
+    } else {
+      message = 'Future dates cannot be marked as completed.';
+    }
+    ScaffoldMessenger.of(context).hideCurrentSnackBar();
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            const Icon(Icons.lock_outline_rounded, color: Colors.white, size: 18),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                message,
+                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+              ),
+            ),
+          ],
+        ),
+        duration: const Duration(seconds: 2),
+        behavior: SnackBarBehavior.floating,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        backgroundColor: const Color(0xFF1E293B),
+      ),
+    );
+  }
+
+  Future<void> _toggleCellCompletion(Activity act, DateTime date) async {
+    final today = _dateOnly(DateTime.now());
+    final target = _dateOnly(date);
+    if (!isSameDay(target, today)) {
+      _showRestrictedDateMessage(date);
+      return;
+    }
+
+    final dStr = _formatDate(date);
+    final compSet = _completedDatesByActivity.putIfAbsent(act.id, () => <String>{});
+    final wasCompleted = compSet.contains(dStr);
+    final willComplete = !wasCompleted;
+
+    // 1. Instant optimistic UI update
+    setState(() {
+      if (willComplete) {
+        compSet.add(dStr);
+      } else {
+        compSet.remove(dStr);
+      }
+    });
+
+    // 2. Persist to cache
+    await _saveCompletionsToCache();
+
+    // 3. Sync through ActivityService (persists to backend and handles streaks & gardens)
+    if (mounted) {
+      final activityService = context.read<ActivityService>();
+      await activityService.toggleActivityCompletion(
+        act.id,
+        willComplete,
+        date: dStr,
+      );
+    }
+  }
+
   bool _isScheduled(Activity activity, DateTime date) {
     try {
+      final dStr = _formatDate(date);
+      // If a completion already exists for this date, it's definitely tracked
+      if (_completedDatesByActivity[activity.id]?.contains(dStr) == true) {
+        return true;
+      }
+
       final start = DateTime.tryParse(activity.startDate) ?? DateTime(2020);
       final dateOnlyVal = _dateOnly(date);
       final startOnlyVal = _dateOnly(start);
 
-      if (dateOnlyVal.isBefore(startOnlyVal)) return false;
+      // Allow backfilling: if within 30 days before start date, show scheduled
+      if (dateOnlyVal.isBefore(startOnlyVal.subtract(const Duration(days: 30)))) {
+        return false;
+      }
 
       final durVal = activity.durationValue > 0 ? activity.durationValue : 12;
       DateTime endDate;
@@ -268,6 +420,17 @@ class _ProgressScreenState extends State<ProgressScreen> {
     }
   }
 
+  List<String> _getCompletedActivitiesForDate(DateTime day) {
+    final dStr = _formatDate(day);
+    final completed = <String>[];
+    for (final act in _userActivities) {
+      if (_completedDatesByActivity[act.id]?.contains(dStr) == true) {
+        completed.add(act.name);
+      }
+    }
+    return completed;
+  }
+
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
@@ -296,9 +459,12 @@ class _ProgressScreenState extends State<ProgressScreen> {
     for (final act in filteredActivities) {
       final compSet = _completedDatesByActivity[act.id] ?? {};
       for (final d in dates) {
-        if (_isScheduled(act, d)) {
+        final dStr = _formatDate(d);
+        final isDone = compSet.contains(dStr);
+        final scheduled = isDone || _isScheduled(act, d);
+        if (scheduled) {
           totalScheduled++;
-          if (compSet.contains(_formatDate(d))) {
+          if (isDone) {
             totalCompleted++;
           }
         }
@@ -312,24 +478,42 @@ class _ProgressScreenState extends State<ProgressScreen> {
         title: const Text('Progress Matrix', style: TextStyle(fontWeight: FontWeight.w800)),
         actions: [
           IconButton(
+            tooltip: _calendarExpanded ? 'Collapse Calendar' : 'Expand Calendar',
+            icon: Icon(_calendarExpanded ? Icons.calendar_view_month_rounded : Icons.calendar_month_outlined),
+            onPressed: () => setState(() => _calendarExpanded = !_calendarExpanded),
+          ),
+          IconButton(
             tooltip: 'Refresh',
             icon: const Icon(Icons.refresh_rounded),
             onPressed: _loadData,
           ),
         ],
       ),
-      body: _loading
+      body: (_loading && _userActivities.isEmpty)
           ? const Center(child: CircularProgressIndicator())
           : RefreshIndicator(
               onRefresh: _loadData,
               child: ListView(
                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 16),
                 children: [
-                  // Filter Controls Card
+                  if (_loading)
+                    const Padding(
+                      padding: EdgeInsets.only(bottom: 12),
+                      child: LinearProgressIndicator(minHeight: 2),
+                    ),
+                  // 1. Interactive Calendar Card
+                  _buildCalendarCard(theme, isDark),
+                  const SizedBox(height: 16),
+
+                  // 2. Selected Day Inspector (Instant check/uncheck for past dates like yesterday)
+                  _buildDayInspectorCard(theme, isDark, filteredActivities),
+                  const SizedBox(height: 16),
+
+                  // 3. Filter Controls Card
                   _buildControlsCard(theme, isDark, range, canGoNext, allGroups),
                   const SizedBox(height: 16),
 
-                  // Overall Stats Grid
+                  // 4. Overall Stats Grid
                   _buildStatsRow(theme, isDark, overallPct, totalCompleted, totalScheduled, filteredActivities.length),
                   const SizedBox(height: 20),
 
@@ -357,7 +541,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
                     ),
                   ],
 
-                  // Progress Matrix Table
+                  // 5. Progress Matrix Table
                   if (filteredActivities.isEmpty)
                     _buildEmptyState(isDark)
                   else ...[
@@ -382,7 +566,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
                                   ),
                                   const SizedBox(width: 8),
                                   Text(
-                                    'Date × Habit History',
+                                    'Date × Habit Matrix',
                                     style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
                                   ),
                                 ],
@@ -390,7 +574,15 @@ class _ProgressScreenState extends State<ProgressScreen> {
                               _buildLegend(isDark),
                             ],
                           ),
-                          const SizedBox(height: 14),
+                          const SizedBox(height: 8),
+                          Text(
+                            'Tap today\'s cells to toggle habit completions. Previous days are locked.',
+                            style: TextStyle(
+                              fontSize: 11,
+                              color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
                           Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder, height: 1),
                           const SizedBox(height: 10),
 
@@ -403,6 +595,346 @@ class _ProgressScreenState extends State<ProgressScreen> {
                 ],
               ),
             ),
+    );
+  }
+
+  Widget _buildCalendarCard(ThemeData theme, bool isDark) {
+    return NeumorphicCard(
+      padding: const EdgeInsets.all(16),
+      borderRadius: 22,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    padding: const EdgeInsets.all(6),
+                    decoration: BoxDecoration(
+                      color: AppColors.primary.withValues(alpha: 0.15),
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.calendar_month_rounded, size: 18, color: AppColors.primary),
+                  ),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Activity Calendar',
+                    style: theme.textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800),
+                  ),
+                ],
+              ),
+              Row(
+                children: [
+                  // Format Selector (Month / 2-Weeks / Week)
+                  Container(
+                    decoration: BoxDecoration(
+                      color: isDark ? AppColors.darkSurfaceRaised : const Color(0xFFF1F5F9),
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        _buildFormatChip('2W', CalendarFormat.twoWeeks, isDark),
+                        _buildFormatChip('M', CalendarFormat.month, isDark),
+                        _buildFormatChip('W', CalendarFormat.week, isDark),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  InkWell(
+                    onTap: () => setState(() => _calendarExpanded = !_calendarExpanded),
+                    borderRadius: BorderRadius.circular(8),
+                    child: Padding(
+                      padding: const EdgeInsets.all(4),
+                      child: Icon(
+                        _calendarExpanded ? Icons.keyboard_arrow_up_rounded : Icons.keyboard_arrow_down_rounded,
+                        color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+
+          if (_calendarExpanded) ...[
+            const SizedBox(height: 12),
+            Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder, height: 1),
+            const SizedBox(height: 10),
+
+            TableCalendar<String>(
+              firstDay: DateTime(2022, 1, 1),
+              lastDay: DateTime.now().add(const Duration(days: 365)),
+              focusedDay: _focusedDay,
+              calendarFormat: _calendarFormat,
+              startingDayOfWeek: StartingDayOfWeek.monday,
+              selectedDayPredicate: (day) => isSameDay(_selectedCalendarDay, day),
+              eventLoader: _getCompletedActivitiesForDate,
+              onDaySelected: (selectedDay, focusedDay) {
+                setState(() {
+                  _selectedCalendarDay = selectedDay;
+                  _focusedDay = focusedDay;
+                });
+              },
+              onFormatChanged: (format) {
+                setState(() => _calendarFormat = format);
+              },
+              headerStyle: HeaderStyle(
+                formatButtonVisible: false,
+                titleCentered: true,
+                titleTextStyle: TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 14,
+                  color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                ),
+                leftChevronIcon: Icon(Icons.chevron_left_rounded, color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary),
+                rightChevronIcon: Icon(Icons.chevron_right_rounded, color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary),
+              ),
+              calendarStyle: CalendarStyle(
+                outsideDaysVisible: false,
+                defaultTextStyle: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary,
+                ),
+                weekendTextStyle: TextStyle(
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                ),
+                todayDecoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.25),
+                  shape: BoxShape.circle,
+                  border: Border.all(color: AppColors.primary, width: 1.5),
+                ),
+                todayTextStyle: const TextStyle(fontWeight: FontWeight.bold, color: AppColors.primary),
+                selectedDecoration: const BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: [AppColors.primary, Color(0xFF6366F1)],
+                  ),
+                  shape: BoxShape.circle,
+                ),
+                selectedTextStyle: const TextStyle(fontWeight: FontWeight.w800, color: Colors.white),
+                markerDecoration: const BoxDecoration(
+                  color: AppColors.emeraldSuccess,
+                  shape: BoxShape.circle,
+                ),
+                markersMaxCount: 4,
+              ),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildFormatChip(String label, CalendarFormat format, bool isDark) {
+    final isSelected = _calendarFormat == format;
+    return GestureDetector(
+      onTap: () => setState(() => _calendarFormat = format),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+        decoration: BoxDecoration(
+          color: isSelected ? AppColors.primary : Colors.transparent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: FontWeight.bold,
+            color: isSelected ? Colors.white : (isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildDayInspectorCard(ThemeData theme, bool isDark, List<Activity> activities) {
+    final dayStr = _formatDate(_selectedCalendarDay);
+    final today = _dateOnly(DateTime.now());
+    final selectedOnly = _dateOnly(_selectedCalendarDay);
+    final diffDays = selectedOnly.difference(today).inDays;
+
+    String relativeText;
+    if (diffDays == 0) {
+      relativeText = 'Today';
+    } else if (diffDays == -1) {
+      relativeText = 'Yesterday';
+    } else if (diffDays < -1) {
+      relativeText = '${diffDays.abs()} days ago';
+    } else {
+      relativeText = 'In $diffDays days';
+    }
+
+    final formattedHeader = DateFormat('EEEE, MMM dd, yyyy').format(_selectedCalendarDay);
+    final completedCount = activities.where((a) => _completedDatesByActivity[a.id]?.contains(dayStr) == true).length;
+    final totalCount = activities.length;
+    final pct = totalCount > 0 ? ((completedCount / totalCount) * 100).round() : 0;
+
+    return NeumorphicCard(
+      padding: const EdgeInsets.all(16),
+      borderRadius: 20,
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          formattedHeader,
+                          style: const TextStyle(fontWeight: FontWeight.w800, fontSize: 13),
+                        ),
+                        const SizedBox(width: 8),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: diffDays == 0
+                                ? AppColors.primary.withValues(alpha: 0.15)
+                                : (diffDays == -1 ? AppColors.emeraldSuccess.withValues(alpha: 0.15) : (isDark ? AppColors.darkSurfaceRaised : const Color(0xFFE2E8F0))),
+                            borderRadius: BorderRadius.circular(6),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (diffDays != 0) ...[
+                                Icon(
+                                  Icons.lock_outline_rounded,
+                                  size: 11,
+                                  color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary,
+                                ),
+                                const SizedBox(width: 4),
+                              ],
+                              Text(
+                                diffDays != 0 ? '$relativeText (Locked)' : relativeText,
+                                style: TextStyle(
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                  color: diffDays == 0 ? AppColors.primary : (diffDays == -1 ? AppColors.emeraldSuccess : (isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary)),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      '$completedCount of $totalCount completed ($pct%)',
+                      style: TextStyle(
+                        fontSize: 11,
+                        color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              IconButton(
+                icon: const Icon(Icons.today_rounded, size: 20),
+                tooltip: 'Jump to Today',
+                onPressed: () {
+                  setState(() {
+                    _selectedCalendarDay = today;
+                    _focusedDay = today;
+                  });
+                },
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder, height: 1),
+          const SizedBox(height: 8),
+
+          if (activities.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 12),
+              child: Center(
+                child: Text(
+                  'No activities found for this filter.',
+                  style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted),
+                ),
+              ),
+            )
+          else
+            ...activities.map((act) {
+              final isDone = _completedDatesByActivity[act.id]?.contains(dayStr) == true;
+              final isSelectedToday = isSameDay(_selectedCalendarDay, DateTime.now());
+              return InkWell(
+                onTap: isSelectedToday
+                    ? () => _toggleCellCompletion(act, _selectedCalendarDay)
+                    : () => _showRestrictedDateMessage(_selectedCalendarDay),
+                borderRadius: BorderRadius.circular(10),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+                  child: Row(
+                    children: [
+                      Text(act.icon ?? '📌', style: const TextStyle(fontSize: 16)),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              act.name,
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w700,
+                                decoration: isDone ? TextDecoration.lineThrough : null,
+                                color: isDone
+                                    ? (isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted)
+                                    : (isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary),
+                              ),
+                            ),
+                            Text(
+                              act.groupName,
+                              style: const TextStyle(fontSize: 10, color: AppColors.primary, fontWeight: FontWeight.w600),
+                            ),
+                          ],
+                        ),
+                      ),
+                      if (!isSelectedToday)
+                        Padding(
+                          padding: const EdgeInsets.only(right: 8),
+                          child: Icon(
+                            Icons.lock_outline_rounded,
+                            size: 14,
+                            color: isDark ? AppColors.darkTextMuted.withValues(alpha: 0.6) : AppColors.lightTextMuted.withValues(alpha: 0.6),
+                          ),
+                        ),
+                      // Interactive checkbox for today, locked indicator for other dates
+                      AnimatedContainer(
+                        duration: const Duration(milliseconds: 200),
+                        width: 26,
+                        height: 26,
+                        decoration: BoxDecoration(
+                          color: isDone
+                              ? (isSelectedToday ? AppColors.emeraldSuccess : AppColors.emeraldSuccess.withValues(alpha: 0.8))
+                              : (isDark ? AppColors.darkSurfaceRaised : const Color(0xFFF1F5F9)),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: isDone
+                                ? AppColors.emeraldSuccess
+                                : (isDark ? AppColors.darkBorder : AppColors.lightBorder),
+                            width: 1.5,
+                          ),
+                        ),
+                        child: isDone
+                            ? const Center(child: Icon(Icons.check_rounded, size: 16, color: Colors.white))
+                            : null,
+                      ),
+                    ],
+                  ),
+                ),
+              );
+            }),
+        ],
+      ),
     );
   }
 
@@ -603,7 +1135,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text(
-                  'Total Checks',
+                  'Completions',
                   style: TextStyle(
                     fontSize: 12,
                     fontWeight: FontWeight.w600,
@@ -615,7 +1147,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
                   children: [
                     Text(
                       '$totalCompleted / $totalScheduled',
-                      style: theme.textTheme.headlineSmall?.copyWith(
+                      style: theme.textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w900,
                       ),
                     ),
@@ -623,12 +1155,12 @@ class _ProgressScreenState extends State<ProgressScreen> {
                     Container(
                       padding: const EdgeInsets.all(6),
                       decoration: BoxDecoration(
-                        color: AppColors.cyanAccent.withValues(alpha: 0.15),
+                        color: AppColors.primary.withValues(alpha: 0.15),
                         shape: BoxShape.circle,
                       ),
                       child: const Icon(
                         Icons.check_circle_outline_rounded,
-                        color: AppColors.cyanAccent,
+                        color: AppColors.primary,
                         size: 18,
                       ),
                     ),
@@ -646,33 +1178,28 @@ class _ProgressScreenState extends State<ProgressScreen> {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        _legendItem('Done', AppColors.emeraldSuccess, icon: Icons.check_rounded),
-        const SizedBox(width: 8),
-        _legendItem('Missed', isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted, icon: Icons.circle_outlined),
-        const SizedBox(width: 8),
-        _legendItem('Off', isDark ? AppColors.darkBorder : AppColors.lightBorder, icon: Icons.remove_rounded),
-      ],
-    );
-  }
-
-  Widget _legendItem(String label, Color color, {required IconData icon}) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.15),
-        borderRadius: BorderRadius.circular(6),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 10, color: color),
-          const SizedBox(width: 3),
-          Text(
-            label,
-            style: TextStyle(fontSize: 10.5, fontWeight: FontWeight.bold, color: color),
+        Container(
+          width: 10,
+          height: 10,
+          decoration: BoxDecoration(
+            color: AppColors.emeraldSuccess,
+            borderRadius: BorderRadius.circular(3),
           ),
-        ],
-      ),
+        ),
+        const SizedBox(width: 4),
+        Text('Done', style: TextStyle(fontSize: 11, color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted)),
+        const SizedBox(width: 10),
+        Container(
+          width: 8,
+          height: 8,
+          decoration: BoxDecoration(
+            shape: BoxShape.circle,
+            border: Border.all(color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted),
+          ),
+        ),
+        const SizedBox(width: 4),
+        Text('Missed', style: TextStyle(fontSize: 11, color: isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted)),
+      ],
     );
   }
 
@@ -682,21 +1209,23 @@ class _ProgressScreenState extends State<ProgressScreen> {
     Map<String, List<Activity>> groupedActivities,
     List<DateTime> dates,
   ) {
-    const double colWidth = 42.0;
-    const double titleWidth = 140.0;
     final todayStr = _formatDate(_dateOnly(DateTime.now()));
+    const double titleWidth = 140.0;
+    const double colWidth = 32.0;
 
     return SingleChildScrollView(
-      scrollDirection: Axis.horizontal,
       controller: _horizontalScrollController,
+      scrollDirection: Axis.horizontal,
+      physics: const BouncingScrollPhysics(),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Header Row
+          // Table Date Headers
           Row(
             children: [
-              SizedBox(
+              Container(
                 width: titleWidth,
+                padding: const EdgeInsets.symmetric(vertical: 4),
                 child: const Text(
                   'Habit',
                   style: TextStyle(fontWeight: FontWeight.w800, fontSize: 12),
@@ -705,38 +1234,56 @@ class _ProgressScreenState extends State<ProgressScreen> {
               ...dates.map((d) {
                 final dStr = _formatDate(d);
                 final isToday = dStr == todayStr;
+                final isSelected = isSameDay(_selectedCalendarDay, d);
                 final dayName = DateFormat('E').format(d).substring(0, 1);
                 final dayNum = d.day.toString();
 
-                return Container(
-                  width: colWidth,
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  decoration: isToday
-                      ? BoxDecoration(
-                          color: AppColors.primary.withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(8),
-                          border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
-                        )
-                      : null,
-                  child: Column(
-                    children: [
-                      Text(
-                        dayName,
-                        style: TextStyle(
-                          fontSize: 10,
-                          fontWeight: FontWeight.bold,
-                          color: isToday ? AppColors.primary : (isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted),
+                return GestureDetector(
+                  onTap: () {
+                    setState(() {
+                      _selectedCalendarDay = d;
+                      _focusedDay = d;
+                    });
+                  },
+                  child: Container(
+                    width: colWidth,
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    decoration: isSelected
+                        ? BoxDecoration(
+                            color: AppColors.primary,
+                            borderRadius: BorderRadius.circular(8),
+                          )
+                        : (isToday
+                            ? BoxDecoration(
+                                color: AppColors.primary.withValues(alpha: 0.15),
+                                borderRadius: BorderRadius.circular(8),
+                                border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+                              )
+                            : null),
+                    child: Column(
+                      children: [
+                        Text(
+                          dayName,
+                          style: TextStyle(
+                            fontSize: 10,
+                            fontWeight: FontWeight.bold,
+                            color: isSelected
+                                ? Colors.white
+                                : (isToday ? AppColors.primary : (isDark ? AppColors.darkTextMuted : AppColors.lightTextMuted)),
+                          ),
                         ),
-                      ),
-                      Text(
-                        dayNum,
-                        style: TextStyle(
-                          fontSize: 11,
-                          fontWeight: isToday ? FontWeight.w900 : FontWeight.w600,
-                          color: isToday ? AppColors.primary : null,
+                        Text(
+                          dayNum,
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: isToday || isSelected ? FontWeight.w900 : FontWeight.w600,
+                            color: isSelected
+                                ? Colors.white
+                                : (isToday ? AppColors.primary : null),
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 );
               }),
@@ -806,17 +1353,24 @@ class _ProgressScreenState extends State<ProgressScreen> {
                         ),
                       ),
 
-                      // Date Matrix Cells
+                      // Interactive Date Matrix Cells (Only today is interactive for toggling; past days are locked)
                       ...dates.map((d) {
                         final dStr = _formatDate(d);
-                        final scheduled = _isScheduled(act, d);
-                        final completed = scheduled && compSet.contains(dStr);
+                        final isToday = dStr == todayStr;
+                        final isCompleted = compSet.contains(dStr);
+                        final scheduled = isCompleted || _isScheduled(act, d);
 
-                        return SizedBox(
-                          width: colWidth,
-                          height: 28,
-                          child: Center(
-                            child: _buildMatrixCell(scheduled, completed, isDark),
+                        return GestureDetector(
+                          onTap: isToday
+                              ? () => _toggleCellCompletion(act, d)
+                              : () => _showRestrictedDateMessage(d),
+                          behavior: HitTestBehavior.opaque,
+                          child: SizedBox(
+                            width: colWidth,
+                            height: 28,
+                            child: Center(
+                              child: _buildMatrixCell(scheduled, isCompleted, isDark, isToday: isToday),
+                            ),
                           ),
                         );
                       }),
@@ -831,7 +1385,30 @@ class _ProgressScreenState extends State<ProgressScreen> {
     );
   }
 
-  Widget _buildMatrixCell(bool isScheduled, bool isCompleted, bool isDark) {
+  Widget _buildMatrixCell(bool isScheduled, bool isCompleted, bool isDark, {bool isToday = true}) {
+    if (isCompleted) {
+      return Container(
+        width: 22,
+        height: 22,
+        decoration: BoxDecoration(
+          color: isToday ? AppColors.emeraldSuccess : AppColors.emeraldSuccess.withValues(alpha: 0.85),
+          borderRadius: BorderRadius.circular(6),
+          boxShadow: isToday
+              ? [
+                  BoxShadow(
+                    color: AppColors.emeraldSuccess.withValues(alpha: 0.4),
+                    blurRadius: 4,
+                    spreadRadius: 0,
+                  ),
+                ]
+              : null,
+        ),
+        child: const Center(
+          child: Icon(Icons.check_rounded, size: 14, color: Colors.white),
+        ),
+      );
+    }
+
     if (!isScheduled) {
       return Icon(
         Icons.remove_rounded,
@@ -842,35 +1419,16 @@ class _ProgressScreenState extends State<ProgressScreen> {
       );
     }
 
-    if (isCompleted) {
-      return Container(
-        width: 22,
-        height: 22,
-        decoration: BoxDecoration(
-          color: AppColors.emeraldSuccess,
-          borderRadius: BorderRadius.circular(6),
-          boxShadow: [
-            BoxShadow(
-              color: AppColors.emeraldSuccess.withValues(alpha: 0.4),
-              blurRadius: 4,
-              spreadRadius: 0,
-            ),
-          ],
-        ),
-        child: const Center(
-          child: Icon(Icons.check_rounded, size: 14, color: Colors.white),
-        ),
-      );
-    }
-
     return Container(
       width: 14,
       height: 14,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
         border: Border.all(
-          color: isDark ? AppColors.darkTextMuted.withValues(alpha: 0.5) : AppColors.lightTextMuted.withValues(alpha: 0.5),
-          width: 1.5,
+          color: isToday
+              ? (isDark ? AppColors.darkTextMuted.withValues(alpha: 0.8) : AppColors.lightTextMuted.withValues(alpha: 0.8))
+              : (isDark ? AppColors.darkTextMuted.withValues(alpha: 0.35) : AppColors.lightTextMuted.withValues(alpha: 0.35)),
+          width: isToday ? 1.8 : 1.2,
         ),
       ),
     );

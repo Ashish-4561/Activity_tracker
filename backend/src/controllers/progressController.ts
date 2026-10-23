@@ -114,7 +114,7 @@ export async function getRangeProgress(req: AuthRequest, res: Response): Promise
        FROM activities a WHERE ${activityFilters.join(' AND ')}`,
       activityParams,
     );
-    const completions = await db.all<any[]>(
+    const rawCompletions = await db.all<any[]>(
       `SELECT ac.activity_id, ac.date, ac.completed, ac.completed_at,
               a.name, a.icon, a.group_name
        FROM activity_completions ac
@@ -124,12 +124,21 @@ export async function getRangeProgress(req: AuthRequest, res: Response): Promise
       [req.userId, from, to, ...activityParams.slice(1)],
     );
 
+    const completions = (rawCompletions || []).map(c => ({
+      ...c,
+      date: formatDateString(c.date),
+      completed: isCompletedValue(c.completed),
+    }));
+
     const completionMap = new Map<string, any>();
     completions.forEach(completion => completionMap.set(`${completion.activity_id}:${completion.date}`, completion));
     const daily: any[] = [];
     let cursor = from;
     while (cursor <= to) {
-      const scheduled = activities.filter(activity => isScheduled(activity, cursor));
+      const scheduled = activities.filter(activity => {
+        const isActCompleted = isCompletedValue(completionMap.get(`${activity.id}:${cursor}`)?.completed);
+        return isActCompleted || isScheduled(activity, cursor);
+      });
       const completed = scheduled.filter(activity => isCompletedValue(completionMap.get(`${activity.id}:${cursor}`)?.completed)).length;
       const total = scheduled.length;
       daily.push({
@@ -157,15 +166,15 @@ export async function getRangeProgress(req: AuthRequest, res: Response): Promise
 
     const groupMap = new Map<string, { completed: number; total: number }>();
     activities.forEach(activity => groupMap.set(activity.group_name, { completed: 0, total: 0 }));
-    daily.forEach(day => activities.filter(activity => isScheduled(activity, day.date)).forEach(activity => {
+    daily.forEach(day => activities.filter(activity => isCompletedValue(completionMap.get(`${activity.id}:${day.date}`)?.completed) || isScheduled(activity, day.date)).forEach(activity => {
       const entry = groupMap.get(activity.group_name)!;
       entry.total += 1;
       if (isCompletedValue(completionMap.get(`${activity.id}:${day.date}`)?.completed)) entry.completed += 1;
     }));
 
     const activityHistory = activities.map(activity => {
-      const activityDaily = daily.map(day => isScheduled(activity, day.date) && isCompletedValue(completionMap.get(`${activity.id}:${day.date}`)?.completed));
-      const scheduledDays = daily.filter(day => isScheduled(activity, day.date)).length;
+      const activityDaily = daily.map(day => isCompletedValue(completionMap.get(`${activity.id}:${day.date}`)?.completed));
+      const scheduledDays = daily.filter(day => isCompletedValue(completionMap.get(`${activity.id}:${day.date}`)?.completed) || isScheduled(activity, day.date)).length;
       const completedDays = activityDaily.filter(Boolean).length;
       return {
         id: activity.id,

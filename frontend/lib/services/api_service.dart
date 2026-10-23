@@ -20,7 +20,7 @@ class ApiException implements Exception {
 class ApiService {
   String get baseUrl => ApiConfig.getBaseUrl();
   static const String _tokenKey = 'auth_token';
-  static const Duration requestTimeout = Duration(seconds: 6);
+  static const Duration requestTimeout = Duration(milliseconds: 3000);
 
   ApiService();
 

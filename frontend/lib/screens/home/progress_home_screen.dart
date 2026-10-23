@@ -1157,7 +1157,7 @@ class _ProgressHomeScreenState extends State<ProgressHomeScreen> {
                   const SizedBox(height: 14),
 
                   // Activities List
-                  if (service.isLoading)
+                  if (service.isLoading && displayActivities.isEmpty)
                     const Padding(
                       padding: EdgeInsets.all(32),
                       child: Center(child: CircularProgressIndicator()),

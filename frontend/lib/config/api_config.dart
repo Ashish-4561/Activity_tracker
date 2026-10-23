@@ -30,7 +30,7 @@ class ApiConfig {
     try {
       final normalized = _normalizeUrl(url);
       final healthUri = Uri.parse('$normalized/health');
-      final res = await http.get(healthUri).timeout(const Duration(milliseconds: 1500));
+      final res = await http.get(healthUri).timeout(const Duration(milliseconds: 1000));
       return res.statusCode == 200;
     } catch (_) {
       return false;
@@ -81,44 +81,39 @@ class ApiConfig {
         '';
 
     final candidates = <String>[];
+    if (customUrl != null && customUrl.isNotEmpty) {
+      candidates.add(_resolveForPlatform(customUrl));
+    }
     if (envUrl.isNotEmpty) {
       candidates.add(_resolveForPlatform(envUrl));
     }
     // Add current active LAN IP candidate
-    candidates.add('http://172.23.131.82:$defaultPort/api');
+    candidates.add('http://172.22.216.187:$defaultPort/api');
     candidates.add(defaultPlatformUrl);
-
-    if (customUrl != null && customUrl.isNotEmpty) {
-      candidates.insert(0, _resolveForPlatform(customUrl));
-    }
 
     final uniqueCandidates = candidates.toSet().toList();
 
-    // Check candidates in parallel with 1500ms timeout
-    try {
-      final healthyUrl = await Future.any(
-        uniqueCandidates.map((url) async {
-          final ok = await isUrlHealthy(url);
-          if (ok) return url;
-          throw Exception('unhealthy');
-        }),
-      );
-      _cachedBaseUrl = healthyUrl;
-      if (customUrl != null && customUrl != healthyUrl) {
-        await prefs.remove(_tokenPrefKey);
+    // Check candidate URLs sequentially with fast timeout
+    for (final candidate in uniqueCandidates) {
+      final healthy = await isUrlHealthy(candidate);
+      if (healthy) {
+        _cachedBaseUrl = candidate;
+        if (customUrl != null && customUrl != candidate) {
+          await prefs.remove(_tokenPrefKey);
+        }
+        return candidate;
       }
-      return healthyUrl;
-    } catch (_) {
-      // Fallback without blocking when offline
-      if (customUrl != null && customUrl.isNotEmpty) {
-        _cachedBaseUrl = _resolveForPlatform(customUrl);
-      } else if (envUrl.isNotEmpty) {
-        _cachedBaseUrl = _resolveForPlatform(envUrl);
-      } else {
-        _cachedBaseUrl = defaultPlatformUrl;
-      }
-      return _cachedBaseUrl!;
     }
+
+    // Fallback without blocking when offline
+    if (envUrl.isNotEmpty) {
+      _cachedBaseUrl = _resolveForPlatform(envUrl);
+    } else if (customUrl != null && customUrl.isNotEmpty) {
+      _cachedBaseUrl = _resolveForPlatform(customUrl);
+    } else {
+      _cachedBaseUrl = defaultPlatformUrl;
+    }
+    return _cachedBaseUrl!;
   }
 
   /// Sets a runtime custom server override (useful for mobile network testing).

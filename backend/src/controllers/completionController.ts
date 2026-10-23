@@ -19,6 +19,12 @@ export async function completeActivity(req: AuthRequest, res: Response): Promise
     }
 
     const targetDate = date || getCurrentDate();
+    const currentDate = getCurrentDate();
+
+    if (targetDate < currentDate) {
+      res.status(400).json({ error: 'Cannot modify activity completions for previous days' });
+      return;
+    }
 
     const db = await getDatabase();
 
@@ -84,6 +90,12 @@ export async function uncompleteActivity(req: AuthRequest, res: Response): Promi
     }
 
     const targetDate = date || getCurrentDate();
+    const currentDate = getCurrentDate();
+
+    if (targetDate < currentDate) {
+      res.status(400).json({ error: 'Cannot modify activity completions for previous days' });
+      return;
+    }
 
     const db = await getDatabase();
 
