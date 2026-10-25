@@ -212,3 +212,107 @@ export async function getCompletionHistory(req: AuthRequest, res: Response): Pro
     res.status(500).json({ error: 'Failed to get completion history' });
   }
 }
+
+export async function trackActivityDuration(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    if (!req.userId) {
+      res.status(401).json({ error: 'Unauthorized' });
+      return;
+    }
+
+    const { activity_id, session_duration_seconds, date, start_timestamp, end_timestamp } = req.body;
+
+    if (!activity_id || session_duration_seconds == null) {
+      res.status(400).json({ error: 'Activity ID and session_duration_seconds are required' });
+      return;
+    }
+
+    const durationSec = Math.max(0, parseInt(session_duration_seconds, 10) || 0);
+    const targetDate = date || getCurrentDate();
+    const db = await getDatabase();
+
+    // Verify activity ownership
+    const activity = await db.get<Activity>(
+      `SELECT * FROM activities WHERE id = ? AND user_id = ?`,
+      [activity_id, req.userId]
+    );
+
+    if (!activity) {
+      res.status(404).json({ error: 'Activity not found' });
+      return;
+    }
+
+    // Check if completion record exists
+    const existingCompletion = await db.get<ActivityCompletion>(
+      `SELECT * FROM activity_completions WHERE activity_id = ? AND user_id = ? AND date = ?`,
+      [activity_id, req.userId, targetDate]
+    );
+
+    let currentSessions: any[] = [];
+    if (existingCompletion && existingCompletion.sessions) {
+      try {
+        currentSessions = typeof existingCompletion.sessions === 'string'
+          ? JSON.parse(existingCompletion.sessions)
+          : existingCompletion.sessions;
+        if (!Array.isArray(currentSessions)) currentSessions = [];
+      } catch (_) {
+        currentSessions = [];
+      }
+    }
+
+    const nowIso = new Date().toISOString();
+    currentSessions.push({
+      start: start_timestamp || nowIso,
+      end: end_timestamp || nowIso,
+      duration_seconds: durationSec,
+    });
+
+    const existingDuration = existingCompletion ? (Number(existingCompletion.duration_seconds) || 0) : 0;
+    const newTotalSeconds = existingDuration + durationSec;
+
+    // Determine completion: if goal reached or already marked complete
+    let shouldComplete = existingCompletion ? (existingCompletion.completed === true || (existingCompletion as any).completed === 1) : false;
+    if (activity.activity_type === 'duration' && activity.target_duration_minutes) {
+      const targetSeconds = activity.target_duration_minutes * 60;
+      if (newTotalSeconds >= targetSeconds) {
+        shouldComplete = true;
+      }
+    }
+
+    const sessionsJson = JSON.stringify(currentSessions);
+
+    if (existingCompletion) {
+      await db.run(
+        `UPDATE activity_completions 
+         SET duration_seconds = ?, sessions = ?, completed = ?, 
+             completed_at = CASE WHEN ? = 1 AND completed_at IS NULL THEN CURRENT_TIMESTAMP ELSE completed_at END
+         WHERE activity_id = ? AND user_id = ? AND date = ?`,
+        [newTotalSeconds, sessionsJson, shouldComplete ? 1 : 0, shouldComplete ? 1 : 0, activity_id, req.userId, targetDate]
+      );
+    } else {
+      const completionId = generateId();
+      await db.run(
+        `INSERT INTO activity_completions (
+          id, activity_id, user_id, group_name, date, completed, completed_at, duration_seconds, sessions
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          completionId, activity_id, req.userId, activity.group_name || 'General', targetDate,
+          shouldComplete ? 1 : 0, shouldComplete ? nowIso : null, newTotalSeconds, sessionsJson
+        ]
+      );
+    }
+
+    res.json({
+      message: 'Activity duration tracked successfully',
+      activity_id,
+      date: targetDate,
+      total_duration_seconds: newTotalSeconds,
+      completed: shouldComplete,
+      sessions: currentSessions,
+    });
+  } catch (error: any) {
+    console.error('Track duration error:', error);
+    res.status(500).json({ error: 'Failed to track duration' });
+  }
+}
+

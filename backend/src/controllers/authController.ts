@@ -128,8 +128,12 @@ export async function getProfile(req: AuthRequest, res: Response): Promise<void>
     }
 
     const db = await getDatabase();
-    const user = await db.get<User>(
-      'SELECT id, name, email, profile_image, theme, ai_enabled, ai_suggestions_enabled, notifications_enabled FROM users WHERE id = ?',
+    const user = await db.get<User & { quiet_hours_enabled?: boolean; quiet_hours_start?: string; quiet_hours_end?: string }>(
+      `SELECT u.id, u.name, u.email, u.profile_image, u.theme, u.ai_enabled, u.ai_suggestions_enabled, u.notifications_enabled,
+              s.quiet_hours_enabled, s.quiet_hours_start, s.quiet_hours_end
+       FROM users u
+       LEFT JOIN user_settings s ON s.user_id = u.id
+       WHERE u.id = ?`,
       [req.userId]
     );
 
@@ -152,7 +156,10 @@ export async function updateProfile(req: AuthRequest, res: Response): Promise<vo
       return;
     }
 
-    const { name, profile_image, theme, ai_enabled, ai_suggestions_enabled, notifications_enabled } = req.body;
+    const { 
+      name, profile_image, theme, ai_enabled, ai_suggestions_enabled, notifications_enabled,
+      quiet_hours_enabled, quiet_hours_start, quiet_hours_end
+    } = req.body;
 
     const db = await getDatabase();
 
@@ -184,18 +191,46 @@ export async function updateProfile(req: AuthRequest, res: Response): Promise<vo
       values.push(notifications_enabled ? 1 : 0);
     }
 
-    if (updates.length === 0) {
-      res.status(400).json({ error: 'No updates provided' });
-      return;
+    if (updates.length > 0) {
+      updates.push('updated_at = CURRENT_TIMESTAMP');
+      values.push(req.userId);
+
+      await db.run(
+        `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
+        values
+      );
     }
 
-    updates.push('updated_at = CURRENT_TIMESTAMP');
-    values.push(req.userId);
-
-    await db.run(
-      `UPDATE users SET ${updates.join(', ')} WHERE id = ?`,
-      values
-    );
+    if (quiet_hours_enabled !== undefined || quiet_hours_start !== undefined || quiet_hours_end !== undefined) {
+      const existingSettings = await db.get<{ id: string }>('SELECT id FROM user_settings WHERE user_id = ?', [req.userId]);
+      if (existingSettings) {
+        const sUpdates: string[] = [];
+        const sValues: any[] = [];
+        if (quiet_hours_enabled !== undefined) {
+          sUpdates.push('quiet_hours_enabled = ?');
+          sValues.push(quiet_hours_enabled ? 1 : 0);
+        }
+        if (quiet_hours_start !== undefined) {
+          sUpdates.push('quiet_hours_start = ?');
+          sValues.push(quiet_hours_start);
+        }
+        if (quiet_hours_end !== undefined) {
+          sUpdates.push('quiet_hours_end = ?');
+          sValues.push(quiet_hours_end);
+        }
+        if (sUpdates.length > 0) {
+          sUpdates.push('updated_at = CURRENT_TIMESTAMP');
+          sValues.push(req.userId);
+          await db.run(`UPDATE user_settings SET ${sUpdates.join(', ')} WHERE user_id = ?`, sValues);
+        }
+      } else {
+        const sid = generateId();
+        await db.run(
+          `INSERT INTO user_settings (id, user_id, quiet_hours_enabled, quiet_hours_start, quiet_hours_end) VALUES (?, ?, ?, ?, ?)`,
+          [sid, req.userId, quiet_hours_enabled ? 1 : 0, quiet_hours_start || '22:00', quiet_hours_end || '07:00']
+        );
+      }
+    }
 
     res.json({ message: 'Profile updated successfully' });
   } catch (error: any) {

@@ -30,6 +30,16 @@ export interface Activity {
   is_active: boolean;
   color?: string;
   description?: string;
+  activity_type?: 'scheduled' | 'duration' | 'flexible';
+  start_time?: string;
+  end_time?: string;
+  repeat_days?: string;
+  target_duration_minutes?: number;
+  reminders_enabled?: boolean;
+  reminder_minutes_before?: number;
+  reminder_at_end?: boolean;
+  duration_seconds?: number;
+  sessions?: string;
   created_at: string;
   updated_at: string;
 }
@@ -42,6 +52,8 @@ export interface ActivityCompletion {
   date: string; // YYYY-MM-DD
   completed: boolean;
   completed_at?: string;
+  duration_seconds?: number;
+  sessions?: string;
   notes?: string;
   created_at: string;
 }
@@ -64,6 +76,9 @@ export interface UserSettings {
   ai_suggestions_enabled: boolean;
   notifications_enabled: boolean;
   timezone: string;
+  quiet_hours_enabled?: boolean;
+  quiet_hours_start?: string;
+  quiet_hours_end?: string;
   updated_at: string;
 }
 

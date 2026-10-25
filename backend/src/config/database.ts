@@ -185,6 +185,14 @@ async function createPostgresTables(pool: Pool): Promise<void> {
       is_active BOOLEAN DEFAULT TRUE,
       color VARCHAR(50),
       description TEXT,
+      activity_type VARCHAR(20) DEFAULT 'flexible',
+      start_time VARCHAR(10),
+      end_time VARCHAR(10),
+      repeat_days TEXT,
+      target_duration_minutes INTEGER,
+      reminders_enabled BOOLEAN DEFAULT FALSE,
+      reminder_minutes_before INTEGER DEFAULT 10,
+      reminder_at_end BOOLEAN DEFAULT FALSE,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -197,6 +205,8 @@ async function createPostgresTables(pool: Pool): Promise<void> {
       date DATE NOT NULL,
       completed BOOLEAN DEFAULT FALSE,
       completed_at TIMESTAMPTZ,
+      duration_seconds INTEGER DEFAULT 0,
+      sessions TEXT DEFAULT '[]',
       notes TEXT,
       created_at TIMESTAMPTZ DEFAULT NOW(),
       CONSTRAINT uq_activity_completion UNIQUE (activity_id, user_id, date)
@@ -220,6 +230,9 @@ async function createPostgresTables(pool: Pool): Promise<void> {
       ai_suggestions_enabled BOOLEAN DEFAULT TRUE,
       notifications_enabled BOOLEAN DEFAULT TRUE,
       timezone VARCHAR(100) DEFAULT 'UTC',
+      quiet_hours_enabled BOOLEAN DEFAULT FALSE,
+      quiet_hours_start VARCHAR(10) DEFAULT '22:00',
+      quiet_hours_end VARCHAR(10) DEFAULT '07:00',
       updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
@@ -243,7 +256,7 @@ async function createPostgresTables(pool: Pool): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_phone_verifications_phone ON phone_verifications(phone);
   `);
 
-  // Run dynamic schema migrations on users table if needed
+  // Run dynamic schema migrations on users, activities, completions, user_settings if needed
   const alterQueries = [
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_user_id TEXT;`,
     `CREATE INDEX IF NOT EXISTS idx_users_auth_user_id ON users(auth_user_id);`,
@@ -251,6 +264,25 @@ async function createPostgresTables(pool: Pool): Promise<void> {
     `ALTER TABLE users ADD COLUMN IF NOT EXISTS auth_provider VARCHAR(20) DEFAULT 'email';`,
     `ALTER TABLE users ALTER COLUMN email DROP NOT NULL;`,
     `ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;`,
+
+    // Scheduling, Duration, and Reminder columns on activities
+    `ALTER TABLE activities ADD COLUMN IF NOT EXISTS activity_type VARCHAR(20) DEFAULT 'flexible';`,
+    `ALTER TABLE activities ADD COLUMN IF NOT EXISTS start_time VARCHAR(10);`,
+    `ALTER TABLE activities ADD COLUMN IF NOT EXISTS end_time VARCHAR(10);`,
+    `ALTER TABLE activities ADD COLUMN IF NOT EXISTS repeat_days TEXT;`,
+    `ALTER TABLE activities ADD COLUMN IF NOT EXISTS target_duration_minutes INTEGER;`,
+    `ALTER TABLE activities ADD COLUMN IF NOT EXISTS reminders_enabled BOOLEAN DEFAULT FALSE;`,
+    `ALTER TABLE activities ADD COLUMN IF NOT EXISTS reminder_minutes_before INTEGER DEFAULT 10;`,
+    `ALTER TABLE activities ADD COLUMN IF NOT EXISTS reminder_at_end BOOLEAN DEFAULT FALSE;`,
+
+    // Duration progress & session tracking on activity_completions
+    `ALTER TABLE activity_completions ADD COLUMN IF NOT EXISTS duration_seconds INTEGER DEFAULT 0;`,
+    `ALTER TABLE activity_completions ADD COLUMN IF NOT EXISTS sessions TEXT DEFAULT '[]';`,
+
+    // Quiet hours on user_settings
+    `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS quiet_hours_enabled BOOLEAN DEFAULT FALSE;`,
+    `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS quiet_hours_start VARCHAR(10) DEFAULT '22:00';`,
+    `ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS quiet_hours_end VARCHAR(10) DEFAULT '07:00';`,
   ];
   for (const query of alterQueries) {
     try {
@@ -295,6 +327,14 @@ async function createSqliteTables(db: SqliteDatabase): Promise<void> {
       is_active INTEGER DEFAULT 1,
       color TEXT,
       description TEXT,
+      activity_type TEXT DEFAULT 'flexible',
+      start_time TEXT,
+      end_time TEXT,
+      repeat_days TEXT,
+      target_duration_minutes INTEGER,
+      reminders_enabled INTEGER DEFAULT 0,
+      reminder_minutes_before INTEGER DEFAULT 10,
+      reminder_at_end INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
@@ -308,6 +348,8 @@ async function createSqliteTables(db: SqliteDatabase): Promise<void> {
       date TEXT NOT NULL,
       completed INTEGER DEFAULT 0,
       completed_at DATETIME,
+      duration_seconds INTEGER DEFAULT 0,
+      sessions TEXT DEFAULT '[]',
       notes TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (activity_id) REFERENCES activities(id) ON DELETE CASCADE,
@@ -334,6 +376,9 @@ async function createSqliteTables(db: SqliteDatabase): Promise<void> {
       ai_suggestions_enabled INTEGER DEFAULT 1,
       notifications_enabled INTEGER DEFAULT 1,
       timezone TEXT DEFAULT 'UTC',
+      quiet_hours_enabled INTEGER DEFAULT 0,
+      quiet_hours_start TEXT DEFAULT '22:00',
+      quiet_hours_end TEXT DEFAULT '07:00',
       updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
       FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
     );
@@ -355,6 +400,27 @@ async function createSqliteTables(db: SqliteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_activity_completions_date ON activity_completions(date);
     CREATE INDEX IF NOT EXISTS idx_chat_messages_user_id ON chat_messages(user_id);
   `);
+
+  const sqliteAlterQueries = [
+    `ALTER TABLE activities ADD COLUMN activity_type TEXT DEFAULT 'flexible';`,
+    `ALTER TABLE activities ADD COLUMN start_time TEXT;`,
+    `ALTER TABLE activities ADD COLUMN end_time TEXT;`,
+    `ALTER TABLE activities ADD COLUMN repeat_days TEXT;`,
+    `ALTER TABLE activities ADD COLUMN target_duration_minutes INTEGER;`,
+    `ALTER TABLE activities ADD COLUMN reminders_enabled INTEGER DEFAULT 0;`,
+    `ALTER TABLE activities ADD COLUMN reminder_minutes_before INTEGER DEFAULT 10;`,
+    `ALTER TABLE activities ADD COLUMN reminder_at_end INTEGER DEFAULT 0;`,
+    `ALTER TABLE activity_completions ADD COLUMN duration_seconds INTEGER DEFAULT 0;`,
+    `ALTER TABLE activity_completions ADD COLUMN sessions TEXT DEFAULT '[]';`,
+    `ALTER TABLE user_settings ADD COLUMN quiet_hours_enabled INTEGER DEFAULT 0;`,
+    `ALTER TABLE user_settings ADD COLUMN quiet_hours_start TEXT DEFAULT '22:00';`,
+    `ALTER TABLE user_settings ADD COLUMN quiet_hours_end TEXT DEFAULT '07:00';`,
+  ];
+  for (const q of sqliteAlterQueries) {
+    try {
+      await db.exec(q);
+    } catch (_) {}
+  }
 }
 
 export function parseDatabaseUrl(databaseUrl: string): PoolConfig {

@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
 import '../../services/activity_service.dart';
 import '../../services/theme_service.dart';
+import '../../services/notification_service.dart';
 import '../../widgets/auth_prompt_dialog.dart';
 import '../../widgets/daytrack_logo.dart';
 import '../../widgets/neumorphic_card.dart';
@@ -19,6 +20,145 @@ class ProfileScreen extends StatefulWidget {
 }
 
 class _ProfileScreenState extends State<ProfileScreen> {
+  TimeOfDay _parseHHMM(String? hhmm, TimeOfDay defaultTime) {
+    if (hhmm == null || !hhmm.contains(':')) return defaultTime;
+    final parts = hhmm.split(':');
+    return TimeOfDay(
+      hour: int.tryParse(parts[0]) ?? defaultTime.hour,
+      minute: int.tryParse(parts[1]) ?? defaultTime.minute,
+    );
+  }
+
+  String _formatTimeOfDay(TimeOfDay time) {
+    final hour = time.hourOfPeriod == 0 ? 12 : time.hourOfPeriod;
+    final minute = time.minute.toString().padLeft(2, '0');
+    final period = time.period == DayPeriod.am ? 'AM' : 'PM';
+    return '$hour:$minute $period';
+  }
+
+  void _showQuietHoursDialog(NotificationService notifService) {
+    final authService = context.read<AuthService>();
+    bool enabled = notifService.quietHoursEnabled;
+    TimeOfDay startTime = _parseHHMM(notifService.quietHoursStart, const TimeOfDay(hour: 22, minute: 0));
+    TimeOfDay endTime = _parseHHMM(notifService.quietHoursEnd, const TimeOfDay(hour: 7, minute: 0));
+
+    showDialog(
+      context: context,
+      builder: (ctx) => StatefulBuilder(
+        builder: (context, setDialogState) {
+          return AlertDialog(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+            title: const Row(
+              children: [
+                Icon(Icons.bedtime_rounded, color: AppColors.primary),
+                SizedBox(width: 10),
+                Text('Quiet Hours & Reminders'),
+              ],
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text(
+                    'During quiet hours, scheduled notifications are paused and shifted to when quiet hours end.',
+                    style: TextStyle(fontSize: 12.5),
+                  ),
+                  const SizedBox(height: 16),
+                  SwitchListTile(
+                    title: const Text('Enable Quiet Hours', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                    value: enabled,
+                    activeThumbColor: AppColors.primary,
+                    contentPadding: EdgeInsets.zero,
+                    onChanged: (val) => setDialogState(() => enabled = val),
+                  ),
+                  if (enabled) ...[
+                    const SizedBox(height: 10),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.nightlight_round, size: 16),
+                            label: Text('Starts: ${_formatTimeOfDay(startTime)}'),
+                            onPressed: () async {
+                              final picked = await showTimePicker(context: context, initialTime: startTime);
+                              if (picked != null) setDialogState(() => startTime = picked);
+                            },
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: OutlinedButton.icon(
+                            icon: const Icon(Icons.wb_sunny_rounded, size: 16),
+                            label: Text('Ends: ${_formatTimeOfDay(endTime)}'),
+                            onPressed: () async {
+                              final picked = await showTimePicker(context: context, initialTime: endTime);
+                              if (picked != null) setDialogState(() => endTime = picked);
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 18),
+                  const Divider(),
+                  const SizedBox(height: 6),
+                  const Text('Test Notification & Snooze', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 13)),
+                  const SizedBox(height: 4),
+                  const Text('Send an instant test notification to check sound and 10-minute snooze action.', style: TextStyle(fontSize: 11.5)),
+                  const SizedBox(height: 10),
+                  SizedBox(
+                    width: double.infinity,
+                    child: OutlinedButton.icon(
+                      icon: const Icon(Icons.notifications_active_rounded, size: 16),
+                      label: const Text('Send Test Notification'),
+                      onPressed: () async {
+                        await notifService.showTestNotification();
+                        if (mounted) {
+                          _showMessage('Test notification triggered!');
+                        }
+                      },
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.pop(ctx),
+                child: const Text('Cancel'),
+              ),
+              FilledButton(
+                onPressed: () async {
+                  final startStr = '${startTime.hour.toString().padLeft(2, '0')}:${startTime.minute.toString().padLeft(2, '0')}';
+                  final endStr = '${endTime.hour.toString().padLeft(2, '0')}:${endTime.minute.toString().padLeft(2, '0')}';
+                  await notifService.updateSettings(
+                    quietHoursEnabled: enabled,
+                    quietHoursStart: startStr,
+                    quietHoursEnd: endStr,
+                  );
+                  try {
+                    await authService.updateProfile(
+                      quietHoursEnabled: enabled,
+                      quietHoursStart: startStr,
+                      quietHoursEnd: endStr,
+                    );
+                  } catch (_) {}
+                  if (ctx.mounted) {
+                    Navigator.pop(ctx);
+                  }
+                  if (mounted) {
+                    _showMessage('Quiet hours settings saved!');
+                  }
+                },
+                child: const Text('Save'),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
   void _showMessage(String message, {bool isError = false}) {
     if (!mounted) return;
     ScaffoldMessenger.of(context).showSnackBar(
@@ -480,6 +620,30 @@ class _ProfileScreenState extends State<ProfileScreen> {
                   onChanged: user != null
                       ? (val) => context.read<AuthService>().updateProfile(notificationsEnabled: val)
                       : (val) => AuthPromptDialog.show(context),
+                ),
+                Divider(color: isDark ? AppColors.darkBorder : AppColors.lightBorder, height: 1, indent: 56),
+                Consumer<NotificationService>(
+                  builder: (context, notif, _) {
+                    return ListTile(
+                      leading: Container(
+                        padding: const EdgeInsets.all(8),
+                        decoration: BoxDecoration(
+                          color: AppColors.primary.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Icon(Icons.bedtime_rounded, color: AppColors.primary, size: 20),
+                      ),
+                      title: const Text('Quiet Hours & Reminders', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14)),
+                      subtitle: Text(
+                        notif.quietHoursEnabled
+                            ? 'Active (${notif.quietHoursStart} - ${notif.quietHoursEnd})'
+                            : 'Disabled (Tap to configure)',
+                        style: TextStyle(fontSize: 12, color: isDark ? AppColors.darkTextSecondary : AppColors.lightTextSecondary),
+                      ),
+                      trailing: const Icon(Icons.chevron_right_rounded, size: 20),
+                      onTap: () => _showQuietHoursDialog(notif),
+                    );
+                  },
                 ),
               ],
             ),

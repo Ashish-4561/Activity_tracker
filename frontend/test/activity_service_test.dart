@@ -109,4 +109,118 @@ void main() {
       expect(user.aiEnabled, true);
     });
   });
+  group('Three Activity Types Serialization & Tracking Tests', () {
+    test('Scheduled Activity parses time windows, repeat days and reminders', () {
+      final json = {
+        'id': 'sched-1',
+        'user_id': 'user-1',
+        'name': 'Team Standup',
+        'group_name': 'Work',
+        'icon': '🕒',
+        'frequency': 'custom',
+        'start_date': '2026-10-26',
+        'frequency_value': 1,
+        'frequency_unit': 'days',
+        'duration_value': 3,
+        'duration_unit': 'months',
+        'is_active': 1,
+        'activity_type': 'scheduled',
+        'start_time': '09:30',
+        'end_time': '10:00',
+        'repeat_days': [1, 2, 3, 4, 5],
+        'reminders_enabled': 1,
+        'reminder_minutes_before': 15,
+        'reminder_at_end': 1,
+        'created_at': '2026-10-26T00:00:00Z',
+        'updated_at': '2026-10-26T00:00:00Z',
+        'completed': 0,
+      };
+
+      final act = Activity.fromJson(json);
+
+      expect(act.activityType, 'scheduled');
+      expect(act.startTime, '09:30');
+      expect(act.endTime, '10:00');
+      expect(act.repeatDays, [1, 2, 3, 4, 5]);
+      expect(act.remindersEnabled, true);
+      expect(act.reminderMinutesBefore, 15);
+      expect(act.reminderAtEnd, true);
+
+      final map = act.toJson();
+      expect(map['activity_type'], 'scheduled');
+      expect(map['start_time'], '09:30');
+      expect(map['end_time'], '10:00');
+      expect(map['repeat_days'], [1, 2, 3, 4, 5]);
+      expect(map['reminders_enabled'], true);
+    });
+
+    test('Daily Duration Goal parses target minutes, tracked seconds, and sessions', () {
+      final json = {
+        'id': 'dur-1',
+        'user_id': 'user-1',
+        'name': 'Study Flutter & Systems',
+        'group_name': 'Study',
+        'icon': '⏳',
+        'frequency': 'custom',
+        'start_date': '2026-10-26',
+        'frequency_value': 1,
+        'frequency_unit': 'days',
+        'duration_value': 3,
+        'duration_unit': 'months',
+        'is_active': 1,
+        'activity_type': 'duration',
+        'target_duration_minutes': 300, // 5 hours
+        'tracked_duration_seconds': 7200, // 2 hours
+        'sessions': [
+          {'start': '2026-10-26T09:00:00Z', 'end': '2026-10-26T10:00:00Z', 'duration_seconds': 3600},
+          {'start': '2026-10-26T14:00:00Z', 'end': '2026-10-26T15:00:00Z', 'duration_seconds': 3600},
+        ],
+        'reminders_enabled': 1,
+        'created_at': '2026-10-26T00:00:00Z',
+        'updated_at': '2026-10-26T00:00:00Z',
+        'completed': 0,
+      };
+
+      final act = Activity.fromJson(json);
+
+      expect(act.activityType, 'duration');
+      expect(act.targetDurationMinutes, 300);
+      expect(act.trackedDurationSeconds, 7200);
+      expect(act.sessions.length, 2);
+      expect(act.isCompleted, false);
+
+      // Verify serialized output preserves sessions and tracked duration
+      final map = act.toJson();
+      expect(map['activity_type'], 'duration');
+      expect(map['target_duration_minutes'], 300);
+      expect(map['tracked_duration_seconds'], 7200);
+      expect((map['sessions'] as List).length, 2);
+    });
+
+    test('Flexible Activity defaults to flexible type with optional reminders', () {
+      final json = {
+        'id': 'flex-1',
+        'user_id': 'user-1',
+        'name': 'Journaling',
+        'group_name': 'Personal',
+        'icon': '✍️',
+        'frequency': 'daily',
+        'start_date': '2026-10-26',
+        'frequency_value': 1,
+        'frequency_unit': 'days',
+        'duration_value': 1,
+        'duration_unit': 'months',
+        'is_active': 1,
+        'created_at': '2026-10-26T00:00:00Z',
+        'updated_at': '2026-10-26T00:00:00Z',
+        'completed': 1,
+      };
+
+      final act = Activity.fromJson(json);
+
+      expect(act.activityType, 'flexible');
+      expect(act.isCompleted, true);
+      expect(act.targetDurationMinutes, isNull);
+    });
+  });
 }

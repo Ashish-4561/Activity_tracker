@@ -7,6 +7,8 @@ import 'services/auth_service.dart';
 import 'services/activity_service.dart';
 import 'services/api_service.dart';
 import 'services/theme_service.dart';
+import 'services/notification_service.dart';
+import 'services/activity_timer_manager.dart';
 import 'screens/splash/splash_screen.dart';
 
 void main() async {
@@ -16,6 +18,11 @@ void main() async {
   } catch (_) {}
 
   await ApiConfig.init();
+  try {
+    await NotificationService().init();
+  } catch (e) {
+    debugPrint('⚠ NotificationService init error: $e');
+  }
   debugPrint('✓ API Base URL configured: ${ApiConfig.getBaseUrl()}');
 
   final supabaseUrl = dotenv.env['SUPABASE_URL']?.trim() ??
@@ -54,12 +61,22 @@ class ActivityTrackerApp extends StatelessWidget {
         ChangeNotifierProvider<AuthService>(
           create: (context) => AuthService(context.read<ApiService>()),
         ),
+        ChangeNotifierProvider<NotificationService>.value(
+          value: NotificationService(),
+        ),
+        ChangeNotifierProvider<ActivityTimerManager>.value(
+          value: ActivityTimerManager(),
+        ),
         ChangeNotifierProvider<ActivityService>(
-          create: (context) => ActivityService(
-            context.read<ApiService>(),
-            context.read<AuthService>(),
-            previewMode: false,
-          ),
+          create: (context) {
+            final actService = ActivityService(
+              context.read<ApiService>(),
+              context.read<AuthService>(),
+              previewMode: false,
+            );
+            actService.setNotificationService(NotificationService());
+            return actService;
+          },
         ),
       ],
       child: Consumer<ThemeService>(

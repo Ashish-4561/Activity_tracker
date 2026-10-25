@@ -1,3 +1,4 @@
+import 'notification_service.dart';
 import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
@@ -24,6 +25,18 @@ class Activity {
   final String updatedAt;
   bool isCompleted;
 
+  // Scheduling, Duration, and Reminders
+  final String activityType; // 'scheduled', 'duration', 'flexible'
+  final String? startTime; // "09:00"
+  final String? endTime; // "10:30"
+  final List<int> repeatDays; // e.g. [1, 2, 3, 4, 5] (1=Mon ... 7=Sun)
+  final int? targetDurationMinutes; // e.g. 300 for 5 hours
+  final bool remindersEnabled;
+  final int reminderMinutesBefore;
+  final bool reminderAtEnd;
+  int trackedDurationSeconds;
+  List<Map<String, dynamic>> sessions;
+
   Activity({
     required this.id,
     required this.userId,
@@ -42,6 +55,16 @@ class Activity {
     required this.createdAt,
     required this.updatedAt,
     this.isCompleted = false,
+    this.activityType = 'flexible',
+    this.startTime,
+    this.endTime,
+    this.repeatDays = const [],
+    this.targetDurationMinutes,
+    this.remindersEnabled = false,
+    this.reminderMinutesBefore = 10,
+    this.reminderAtEnd = false,
+    this.trackedDurationSeconds = 0,
+    this.sessions = const [],
   });
 
   factory Activity.fromJson(Map<String, dynamic> json) {
@@ -51,6 +74,36 @@ class Activity {
       if (value is num) return value != 0;
       if (value is String) return value.toLowerCase() == 'true' || value == '1';
       return defaultValue;
+    }
+
+    List<int> parseRepeatDays(dynamic val) {
+      if (val == null) return [];
+      if (val is List) return val.map((e) => int.tryParse(e.toString()) ?? 0).where((e) => e > 0).toList();
+      if (val is String && val.trim().isNotEmpty) {
+        try {
+          final decoded = jsonDecode(val);
+          if (decoded is List) return decoded.map((e) => int.tryParse(e.toString()) ?? 0).where((e) => e > 0).toList();
+        } catch (_) {
+          return val.split(',').map((e) => int.tryParse(e.trim()) ?? 0).where((e) => e > 0).toList();
+        }
+      }
+      return [];
+    }
+
+    List<Map<String, dynamic>> parseSessions(dynamic val) {
+      if (val == null) return [];
+      if (val is List) {
+        return val.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+      }
+      if (val is String && val.trim().isNotEmpty) {
+        try {
+          final decoded = jsonDecode(val);
+          if (decoded is List) {
+            return decoded.map((e) => Map<String, dynamic>.from(e as Map)).toList();
+          }
+        } catch (_) {}
+      }
+      return [];
     }
 
     return Activity(
@@ -71,6 +124,16 @@ class Activity {
       createdAt: json['created_at']?.toString() ?? '',
       updatedAt: json['updated_at']?.toString() ?? '',
       isCompleted: parseBool(json['completed'], false),
+      activityType: json['activity_type']?.toString() ?? 'flexible',
+      startTime: json['start_time']?.toString(),
+      endTime: json['end_time']?.toString(),
+      repeatDays: parseRepeatDays(json['repeat_days']),
+      targetDurationMinutes: json['target_duration_minutes'] != null ? int.tryParse(json['target_duration_minutes'].toString()) : null,
+      remindersEnabled: parseBool(json['reminders_enabled'], false),
+      reminderMinutesBefore: int.tryParse(json['reminder_minutes_before']?.toString() ?? '10') ?? 10,
+      reminderAtEnd: parseBool(json['reminder_at_end'], false),
+      trackedDurationSeconds: int.tryParse((json['tracked_duration_seconds'] ?? json['duration_seconds'])?.toString() ?? '0') ?? 0,
+      sessions: parseSessions(json['sessions']),
     );
   }
 
@@ -93,6 +156,17 @@ class Activity {
       'created_at': createdAt,
       'updated_at': updatedAt,
       'completed': isCompleted,
+      'activity_type': activityType,
+      'start_time': startTime,
+      'end_time': endTime,
+      'repeat_days': repeatDays,
+      'target_duration_minutes': targetDurationMinutes,
+      'reminders_enabled': remindersEnabled,
+      'reminder_minutes_before': reminderMinutesBefore,
+      'reminder_at_end': reminderAtEnd,
+      'duration_seconds': trackedDurationSeconds,
+      'tracked_duration_seconds': trackedDurationSeconds,
+      'sessions': sessions,
     };
   }
 }
@@ -124,6 +198,11 @@ class ActivityService extends ChangeNotifier {
   final ApiService apiService;
   final AuthService authService;
   final bool previewMode;
+  NotificationService? notificationService;
+
+  void setNotificationService(NotificationService ns) {
+    notificationService = ns;
+  }
 
   List<Activity> _activities = [];
   DailyProgress? _dailyProgress;
@@ -332,7 +411,19 @@ class ActivityService extends ChangeNotifier {
   bool get isLoading => _isLoading;
   String? get error => _error;
 
-  int activityProgress(String activityId) => _activityProgress[activityId] ?? 0;
+  int activityProgress(String activityId) {
+    final act = _activities.firstWhere((a) => a.id == activityId, orElse: () => Activity(
+      id: '', userId: '', name: '', frequency: '', startDate: '', frequencyValue: 1, frequencyUnit: '', durationValue: 1, durationUnit: '', groupName: '', isActive: true, createdAt: '', updatedAt: '',
+    ));
+    if (act.id.isNotEmpty) {
+      if (act.isCompleted) return 100;
+      if (act.activityType == 'duration' && act.targetDurationMinutes != null && act.targetDurationMinutes! > 0) {
+        final targetSec = act.targetDurationMinutes! * 60;
+        return ((act.trackedDurationSeconds / targetSec) * 100).clamp(0, 100).toInt();
+      }
+    }
+    return _activityProgress[activityId] ?? 0;
+  }
   int groupProgress(String groupName) => _groupProgress[groupName] ?? 0;
 
   int activityStreak(String activityId) {
@@ -429,6 +520,7 @@ class ActivityService extends ChangeNotifier {
       if (currentUserId != null && currentUserId.isNotEmpty) {
         await _saveUserActivitiesToStorage(currentUserId);
       }
+      notificationService?.syncAllActivities(_activities);
       _isLoading = false;
       notifyListeners();
 
@@ -761,11 +853,20 @@ class ActivityService extends ChangeNotifier {
     String? startDate,
     String? color,
     String? description,
+    String activityType = 'flexible',
+    String? startTime,
+    String? endTime,
+    List<int>? repeatDays,
+    int? targetDurationMinutes,
+    bool remindersEnabled = false,
+    int reminderMinutesBefore = 10,
+    bool reminderAtEnd = false,
   }) async {
     final targetGroup = (groupName == null || groupName.trim().isEmpty) ? 'General' : groupName.trim();
+    final repDays = repeatDays ?? [];
     if (isGuest || previewMode) {
       final now = DateTime.now().toIso8601String();
-      _activities.add(Activity(
+      final newAct = Activity(
         id: 'preview-${DateTime.now().microsecondsSinceEpoch}',
         userId: 'preview-user',
         name: name,
@@ -782,16 +883,26 @@ class ActivityService extends ChangeNotifier {
         isActive: true,
         createdAt: now,
         updatedAt: now,
-      ));
+        activityType: activityType,
+        startTime: startTime,
+        endTime: endTime,
+        repeatDays: repDays,
+        targetDurationMinutes: targetDurationMinutes,
+        remindersEnabled: remindersEnabled,
+        reminderMinutesBefore: reminderMinutesBefore,
+        reminderAtEnd: reminderAtEnd,
+      );
+      _activities.add(newAct);
       _updatePreviewProgress();
       _rebuildPreviewProgress();
       await _saveGuestActivitiesToStorage();
+      notificationService?.scheduleActivityReminders(newAct);
       notifyListeners();
       return;
     }
     final currentUserId = authService.currentUser?.id;
     try {
-      await apiService.createActivity(
+      final res = await apiService.createActivity(
         name: name,
         frequency: frequency,
         groupName: targetGroup,
@@ -803,13 +914,25 @@ class ActivityService extends ChangeNotifier {
         startDate: startDate,
         color: color,
         description: description,
+        activityType: activityType,
+        startTime: startTime,
+        endTime: endTime,
+        repeatDays: repDays,
+        targetDurationMinutes: targetDurationMinutes,
+        remindersEnabled: remindersEnabled,
+        reminderMinutesBefore: reminderMinutesBefore,
+        reminderAtEnd: reminderAtEnd,
       );
       await fetchActivities();
       await fetchDailyProgress();
+      if (res['activity'] != null && res['activity']['id'] != null) {
+        final created = _activities.firstWhere((a) => a.id == res['activity']['id'], orElse: () => _activities.last);
+        notificationService?.scheduleActivityReminders(created);
+      }
     } catch (e) {
       // Fallback: save to user local storage if logged in, or guest storage if guest
       final now = DateTime.now().toIso8601String();
-      _activities.add(Activity(
+      final newAct = Activity(
         id: 'local-${DateTime.now().microsecondsSinceEpoch}',
         userId: currentUserId ?? 'local-user',
         name: name,
@@ -826,7 +949,16 @@ class ActivityService extends ChangeNotifier {
         isActive: true,
         createdAt: now,
         updatedAt: now,
-      ));
+        activityType: activityType,
+        startTime: startTime,
+        endTime: endTime,
+        repeatDays: repDays,
+        targetDurationMinutes: targetDurationMinutes,
+        remindersEnabled: remindersEnabled,
+        reminderMinutesBefore: reminderMinutesBefore,
+        reminderAtEnd: reminderAtEnd,
+      );
+      _activities.add(newAct);
       _updatePreviewProgress();
       _rebuildPreviewProgress();
       if (currentUserId != null && currentUserId.isNotEmpty) {
@@ -834,6 +966,7 @@ class ActivityService extends ChangeNotifier {
       } else {
         await _saveGuestActivitiesToStorage();
       }
+      notificationService?.scheduleActivityReminders(newAct);
       notifyListeners();
     }
   }
@@ -850,36 +983,58 @@ class ActivityService extends ChangeNotifier {
     int? durationValue,
     String? durationUnit,
     String? startDate,
+    String? activityType,
+    String? startTime,
+    String? endTime,
+    List<int>? repeatDays,
+    int? targetDurationMinutes,
+    bool? remindersEnabled,
+    int? reminderMinutesBefore,
+    bool? reminderAtEnd,
   }) async {
+    final index = _activities.indexWhere((a) => a.id == id);
+    if (index != -1) {
+      final current = _activities[index];
+      final updatedAct = Activity(
+        id: current.id,
+        userId: current.userId,
+        name: name ?? current.name,
+        frequency: frequency ?? current.frequency,
+        groupName: groupName ?? current.groupName,
+        icon: icon ?? current.icon,
+        color: color ?? current.color,
+        frequencyValue: frequencyValue ?? current.frequencyValue,
+        frequencyUnit: frequencyUnit ?? current.frequencyUnit,
+        durationValue: durationValue ?? current.durationValue,
+        durationUnit: durationUnit ?? current.durationUnit,
+        startDate: startDate ?? current.startDate,
+        isActive: current.isActive,
+        description: current.description,
+        createdAt: current.createdAt,
+        updatedAt: DateTime.now().toIso8601String(),
+        isCompleted: current.isCompleted,
+        activityType: activityType ?? current.activityType,
+        startTime: startTime ?? current.startTime,
+        endTime: endTime ?? current.endTime,
+        repeatDays: repeatDays ?? current.repeatDays,
+        targetDurationMinutes: targetDurationMinutes ?? current.targetDurationMinutes,
+        remindersEnabled: remindersEnabled ?? current.remindersEnabled,
+        reminderMinutesBefore: reminderMinutesBefore ?? current.reminderMinutesBefore,
+        reminderAtEnd: reminderAtEnd ?? current.reminderAtEnd,
+        trackedDurationSeconds: current.trackedDurationSeconds,
+        sessions: current.sessions,
+      );
+      _activities[index] = updatedAct;
+      notificationService?.scheduleActivityReminders(updatedAct);
+    }
+
     if (isGuest || previewMode) {
-      final index = _activities.indexWhere((a) => a.id == id);
-      if (index != -1) {
-        final current = _activities[index];
-        _activities[index] = Activity(
-          id: current.id,
-          userId: current.userId,
-          name: name ?? current.name,
-          frequency: frequency ?? current.frequency,
-          groupName: groupName ?? current.groupName,
-          icon: icon ?? current.icon,
-          color: color ?? current.color,
-          frequencyValue: frequencyValue ?? current.frequencyValue,
-          frequencyUnit: frequencyUnit ?? current.frequencyUnit,
-          durationValue: durationValue ?? current.durationValue,
-          durationUnit: durationUnit ?? current.durationUnit,
-          startDate: startDate ?? current.startDate,
-          isActive: current.isActive,
-          description: current.description,
-          createdAt: current.createdAt,
-          updatedAt: DateTime.now().toIso8601String(),
-          isCompleted: current.isCompleted,
-        );
-        _rebuildPreviewProgress();
-        await _saveGuestActivitiesToStorage();
-        notifyListeners();
-      }
+      _rebuildPreviewProgress();
+      await _saveGuestActivitiesToStorage();
+      notifyListeners();
       return;
     }
+
     try {
       await apiService.updateActivity(
         id: id,
@@ -893,6 +1048,14 @@ class ActivityService extends ChangeNotifier {
         durationValue: durationValue,
         durationUnit: durationUnit,
         startDate: startDate,
+        activityType: activityType,
+        startTime: startTime,
+        endTime: endTime,
+        repeatDays: repeatDays,
+        targetDurationMinutes: targetDurationMinutes,
+        remindersEnabled: remindersEnabled,
+        reminderMinutesBefore: reminderMinutesBefore,
+        reminderAtEnd: reminderAtEnd,
       );
       await fetchActivities();
     } catch (e) {
@@ -902,7 +1065,83 @@ class ActivityService extends ChangeNotifier {
     }
   }
 
+  /// Logs an accumulated time session for an activity.
+  Future<void> logDurationSession({
+    required String activityId,
+    required int durationSeconds,
+    String? date,
+    DateTime? startTime,
+    DateTime? endTime,
+  }) async {
+    final targetDate = date ?? _currentDate;
+    final index = _activities.indexWhere((a) => a.id == activityId);
+    if (index == -1) return;
+
+    final act = _activities[index];
+    final nowIso = DateTime.now().toIso8601String();
+    final newSession = {
+      'start': startTime?.toIso8601String() ?? nowIso,
+      'end': endTime?.toIso8601String() ?? nowIso,
+      'duration_seconds': durationSeconds,
+    };
+
+    act.trackedDurationSeconds += durationSeconds;
+    act.sessions = List.from(act.sessions)..add(newSession);
+
+    // If target duration met, automatically complete the activity
+    bool justCompleted = false;
+    if (act.activityType == 'duration' && act.targetDurationMinutes != null) {
+      final targetSeconds = act.targetDurationMinutes! * 60;
+      if (act.trackedDurationSeconds >= targetSeconds) {
+        if (!act.isCompleted) {
+          act.isCompleted = true;
+          justCompleted = true;
+          _guestCompletions['$activityId:$targetDate'] = true;
+          notificationService?.cancelActivityNotifications(activityId);
+        }
+      }
+    }
+
+    if (isGuest || previewMode) {
+      _rebuildPreviewProgress();
+      _updatePreviewProgress();
+      await _saveGuestActivitiesToStorage();
+      notifyListeners();
+      return;
+    }
+
+    final currentUserId = authService.currentUser?.id;
+    if (currentUserId != null && currentUserId.isNotEmpty) {
+      await _saveUserActivitiesToStorage(currentUserId);
+    }
+    notifyListeners();
+
+    try {
+      final res = await apiService.trackActivityDuration(
+        activityId: activityId,
+        sessionDurationSeconds: durationSeconds,
+        date: targetDate,
+        startTimestamp: startTime?.toIso8601String(),
+        endTimestamp: endTime?.toIso8601String(),
+      );
+      if (res['total_duration_seconds'] != null) {
+        act.trackedDurationSeconds = res['total_duration_seconds'] as int;
+      }
+      if (res['completed'] == true) {
+        act.isCompleted = true;
+        _guestCompletions['$activityId:$targetDate'] = true;
+      }
+      if (justCompleted) {
+        await fetchDailyProgress(date: targetDate);
+      }
+      notifyListeners();
+    } catch (e) {
+      debugPrint('Sync duration to backend note: $e');
+    }
+  }
+
   Future<void> deleteActivity(String id) async {
+    notificationService?.cancelActivityNotifications(id);
     if (isGuest || previewMode) {
       _activities.removeWhere((activity) => activity.id == id);
       _activityProgress.remove(id);

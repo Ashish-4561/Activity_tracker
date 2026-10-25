@@ -15,6 +15,8 @@ export async function createActivity(req: AuthRequest, res: Response): Promise<v
     const {
       name, group_name, icon, frequency, frequency_value, frequency_unit,
       duration_value, duration_unit, start_date, color, description,
+      activity_type, start_time, end_time, repeat_days, target_duration_minutes,
+      reminders_enabled, reminder_minutes_before, reminder_at_end,
     } = req.body;
 
     if (!name) {
@@ -39,13 +41,31 @@ export async function createActivity(req: AuthRequest, res: Response): Promise<v
       ? start_date
       : new Date().toISOString().split('T')[0];
 
+    const actType = ['scheduled', 'duration', 'flexible'].includes(activity_type) ? activity_type : 'flexible';
+    const repDaysStr = typeof repeat_days === 'string' ? repeat_days : (Array.isArray(repeat_days) ? JSON.stringify(repeat_days) : null);
+    const targetDur = target_duration_minutes != null ? Number(target_duration_minutes) : null;
+    const remEnabled = reminders_enabled === true || reminders_enabled === 'true' || reminders_enabled === 1;
+    const remMinBefore = reminder_minutes_before != null ? Number(reminder_minutes_before) : 10;
+    const remAtEnd = reminder_at_end === true || reminder_at_end === 'true' || reminder_at_end === 1;
+
     const db = await getDatabase();
     const activityId = generateId();
 
     await db.run(
-      `INSERT INTO activities (id, user_id, name, group_name, icon, frequency, start_date, frequency_value, frequency_unit, duration_value, duration_unit, color, description, is_active)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [activityId, req.userId, name.trim(), group_name || 'General', icon || null, normalizedFrequency, startDate, frequencyValue, normalizedUnit, durationValue, normalizedDurationUnit, color || null, description || null, true]
+      `INSERT INTO activities (
+        id, user_id, name, group_name, icon, frequency, start_date, 
+        frequency_value, frequency_unit, duration_value, duration_unit, 
+        color, description, is_active, activity_type, start_time, end_time, 
+        repeat_days, target_duration_minutes, reminders_enabled, 
+        reminder_minutes_before, reminder_at_end
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        activityId, req.userId, name.trim(), group_name || 'General', icon || null,
+        normalizedFrequency, startDate, frequencyValue, normalizedUnit,
+        durationValue, normalizedDurationUnit, color || null, description || null,
+        true, actType, start_time || null, end_time || null, repDaysStr,
+        targetDur, remEnabled, remMinBefore, remAtEnd
+      ]
     );
 
     // Ensure group exists
@@ -66,6 +86,14 @@ export async function createActivity(req: AuthRequest, res: Response): Promise<v
         duration_value: durationValue,
         duration_unit: normalizedDurationUnit,
         is_active: true,
+        activity_type: actType,
+        start_time: start_time || null,
+        end_time: end_time || null,
+        repeat_days: repDaysStr,
+        target_duration_minutes: targetDur,
+        reminders_enabled: remEnabled,
+        reminder_minutes_before: remMinBefore,
+        reminder_at_end: remAtEnd,
       },
     });
   } catch (error: any) {
@@ -88,7 +116,9 @@ export async function getActivities(req: AuthRequest, res: Response): Promise<vo
     const activities = await db.all<Activity[]>(
       `SELECT a.*, 
               CASE WHEN ac.completed = true OR ac.completed = 1 THEN 1 ELSE 0 END as completed,
-              ac.completed_at
+              ac.completed_at,
+              COALESCE(ac.duration_seconds, 0) as duration_seconds,
+              ac.sessions
        FROM activities a
        LEFT JOIN activity_completions ac 
          ON ac.activity_id = a.id 
@@ -141,7 +171,12 @@ export async function updateActivity(req: AuthRequest, res: Response): Promise<v
     }
 
     const { id } = req.params;
-    const { name, group_name, icon, frequency, frequency_value, frequency_unit, duration_value, duration_unit, start_date, color, description } = req.body;
+    const { 
+      name, group_name, icon, frequency, frequency_value, frequency_unit, 
+      duration_value, duration_unit, start_date, color, description,
+      activity_type, start_time, end_time, repeat_days, target_duration_minutes,
+      reminders_enabled, reminder_minutes_before, reminder_at_end
+    } = req.body;
 
     // Verify ownership
     const db = await getDatabase();
@@ -225,6 +260,45 @@ export async function updateActivity(req: AuthRequest, res: Response): Promise<v
     if (description !== undefined) {
       updates.push('description = ?');
       values.push(description);
+    }
+    if (activity_type !== undefined) {
+      if (!['scheduled', 'duration', 'flexible'].includes(activity_type)) {
+        res.status(400).json({ error: 'Invalid activity type' });
+        return;
+      }
+      updates.push('activity_type = ?');
+      values.push(activity_type);
+    }
+    if (start_time !== undefined) {
+      updates.push('start_time = ?');
+      values.push(start_time || null);
+    }
+    if (end_time !== undefined) {
+      updates.push('end_time = ?');
+      values.push(end_time || null);
+    }
+    if (repeat_days !== undefined) {
+      const repStr = typeof repeat_days === 'string' ? repeat_days : (Array.isArray(repeat_days) ? JSON.stringify(repeat_days) : null);
+      updates.push('repeat_days = ?');
+      values.push(repStr);
+    }
+    if (target_duration_minutes !== undefined) {
+      updates.push('target_duration_minutes = ?');
+      values.push(target_duration_minutes != null ? Number(target_duration_minutes) : null);
+    }
+    if (reminders_enabled !== undefined) {
+      const rem = reminders_enabled === true || reminders_enabled === 'true' || reminders_enabled === 1;
+      updates.push('reminders_enabled = ?');
+      values.push(rem);
+    }
+    if (reminder_minutes_before !== undefined) {
+      updates.push('reminder_minutes_before = ?');
+      values.push(Number(reminder_minutes_before));
+    }
+    if (reminder_at_end !== undefined) {
+      const remEnd = reminder_at_end === true || reminder_at_end === 'true' || reminder_at_end === 1;
+      updates.push('reminder_at_end = ?');
+      values.push(remEnd);
     }
 
     if (updates.length === 0) {

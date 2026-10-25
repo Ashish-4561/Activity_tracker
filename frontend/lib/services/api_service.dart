@@ -273,6 +273,9 @@ class ApiService {
     bool? aiEnabled,
     bool? aiSuggestionsEnabled,
     bool? notificationsEnabled,
+    bool? quietHoursEnabled,
+    String? quietHoursStart,
+    String? quietHoursEnd,
   }) async {
     final uri = Uri.parse('$baseUrl/auth/profile');
     try {
@@ -283,6 +286,12 @@ class ApiService {
       if (aiEnabled != null) body['ai_enabled'] = aiEnabled;
       if (aiSuggestionsEnabled != null) body['ai_suggestions_enabled'] = aiSuggestionsEnabled;
       if (notificationsEnabled != null) body['notifications_enabled'] = notificationsEnabled;
+      if (quietHoursEnabled != null) body['quiet_hours_enabled'] = quietHoursEnabled;
+      if (quietHoursStart != null) body['quiet_hours_start'] = quietHoursStart;
+      if (quietHoursEnd != null) body['quiet_hours_end'] = quietHoursEnd;
+      if (quietHoursEnabled != null) body['quiet_hours_enabled'] = quietHoursEnabled;
+      if (quietHoursStart != null) body['quiet_hours_start'] = quietHoursStart;
+      if (quietHoursEnd != null) body['quiet_hours_end'] = quietHoursEnd;
 
       final response = await http
           .put(
@@ -366,6 +375,14 @@ class ApiService {
     String? startDate,
     String? color,
     String? description,
+    String? activityType,
+    String? startTime,
+    String? endTime,
+    List<int>? repeatDays,
+    int? targetDurationMinutes,
+    bool? remindersEnabled,
+    int? reminderMinutesBefore,
+    bool? reminderAtEnd,
   }) async {
     final uri = Uri.parse('$baseUrl/activities');
     try {
@@ -385,6 +402,14 @@ class ApiService {
               'start_date': startDate,
               'color': color,
               'description': description,
+              if (activityType != null) 'activity_type': activityType,
+              if (startTime != null) 'start_time': startTime,
+              if (endTime != null) 'end_time': endTime,
+              if (repeatDays != null) 'repeat_days': repeatDays,
+              if (targetDurationMinutes != null) 'target_duration_minutes': targetDurationMinutes,
+              if (remindersEnabled != null) 'reminders_enabled': remindersEnabled,
+              if (reminderMinutesBefore != null) 'reminder_minutes_before': reminderMinutesBefore,
+              if (reminderAtEnd != null) 'reminder_at_end': reminderAtEnd,
             }),
           )
           .timeout(requestTimeout);
@@ -435,6 +460,14 @@ class ApiService {
     int? durationValue,
     String? durationUnit,
     String? startDate,
+    String? activityType,
+    String? startTime,
+    String? endTime,
+    List<int>? repeatDays,
+    int? targetDurationMinutes,
+    bool? remindersEnabled,
+    int? reminderMinutesBefore,
+    bool? reminderAtEnd,
   }) async {
     final uri = Uri.parse('$baseUrl/activities/$id');
     try {
@@ -449,6 +482,14 @@ class ApiService {
       if (durationValue != null) body['duration_value'] = durationValue;
       if (durationUnit != null) body['duration_unit'] = durationUnit;
       if (startDate != null) body['start_date'] = startDate;
+      if (activityType != null) body['activity_type'] = activityType;
+      if (startTime != null) body['start_time'] = startTime;
+      if (endTime != null) body['end_time'] = endTime;
+      if (repeatDays != null) body['repeat_days'] = repeatDays;
+      if (targetDurationMinutes != null) body['target_duration_minutes'] = targetDurationMinutes;
+      if (remindersEnabled != null) body['reminders_enabled'] = remindersEnabled;
+      if (reminderMinutesBefore != null) body['reminder_minutes_before'] = reminderMinutesBefore;
+      if (reminderAtEnd != null) body['reminder_at_end'] = reminderAtEnd;
 
       final response = await http
           .put(
@@ -596,6 +637,41 @@ class ApiService {
       _handleError(e, uri);
     }
   }
+
+  Future<Map<String, dynamic>> trackActivityDuration({
+    required String activityId,
+    required int sessionDurationSeconds,
+    String? date,
+    String? startTimestamp,
+    String? endTimestamp,
+  }) async {
+    final uri = Uri.parse('$baseUrl/completions/track-duration');
+    try {
+      final response = await http
+          .post(
+            uri,
+            headers: await _getHeaders(),
+            body: jsonEncode({
+              'activity_id': activityId,
+              'session_duration_seconds': sessionDurationSeconds,
+              if (date != null) 'date': date,
+              if (startTimestamp != null) 'start_timestamp': startTimestamp,
+              if (endTimestamp != null) 'end_timestamp': endTimestamp,
+            }),
+          )
+          .timeout(requestTimeout);
+
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body);
+      } else {
+        final err = jsonDecode(response.body)['error'] ?? 'Failed to track duration';
+        throw ApiException(err, statusCode: response.statusCode);
+      }
+    } catch (e) {
+      _handleError(e, uri);
+    }
+  }
+
 
   Future<Map<String, dynamic>> getCompletionsByDate({String? date}) async {
     final baseUri = Uri.parse('$baseUrl/completions/by-date');

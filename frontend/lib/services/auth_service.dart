@@ -869,6 +869,9 @@ class AuthService extends ChangeNotifier {
     bool? aiEnabled,
     bool? aiSuggestionsEnabled,
     bool? notificationsEnabled,
+    bool? quietHoursEnabled,
+    String? quietHoursStart,
+    String? quietHoursEnd,
   }) async {
     _isLoading = true;
     _error = null;
@@ -882,6 +885,9 @@ class AuthService extends ChangeNotifier {
         aiEnabled: aiEnabled,
         aiSuggestionsEnabled: aiSuggestionsEnabled,
         notificationsEnabled: notificationsEnabled,
+        quietHoursEnabled: quietHoursEnabled,
+        quietHoursStart: quietHoursStart,
+        quietHoursEnd: quietHoursEnd,
       );
 
       await fetchProfile();
