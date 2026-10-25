@@ -201,6 +201,8 @@ class AuthService extends ChangeNotifier {
             _authState = AuthState.authenticated;
             await apiService.setToken(session.accessToken);
             await _saveCachedUserProfile(_currentUser!);
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool(_kGuestModeKey, false);
             notifyListeners();
 
             // Background non-fatal profile enrichment
@@ -208,10 +210,19 @@ class AuthService extends ChangeNotifier {
               await fetchProfile().timeout(const Duration(seconds: 4));
             } catch (_) {}
           } else if (event == AuthChangeEvent.signedOut) {
+            // Guard: If there is an active session or the user is already authenticated with another account,
+            // ignore delayed/stale signedOut events from previous sessions
+            final currentSession = Supabase.instance.client.auth.currentSession;
+            if (currentSession != null || (_currentUser != null && _authState == AuthState.authenticated)) {
+              debugPrint('ℹ Ignored stale signedOut event because an active authenticated session exists.');
+              return;
+            }
             _currentUser = null;
             _authState = AuthState.unauthenticated;
             await apiService.clearToken();
             await _clearCachedUserProfile();
+            final prefs = await SharedPreferences.getInstance();
+            await prefs.setBool(_kGuestModeKey, false);
             notifyListeners();
           }
         });
@@ -519,6 +530,8 @@ class AuthService extends ChangeNotifier {
       _authState = AuthState.authenticated;
       await apiService.setToken(session.accessToken);
       await _saveCachedUserProfile(_currentUser!);
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_kGuestModeKey, false);
 
       try {
         await fetchProfile().timeout(const Duration(seconds: 4));
@@ -578,6 +591,8 @@ class AuthService extends ChangeNotifier {
 
       _currentUser = User.fromJson(response['user']);
       _authState = AuthState.authenticated;
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setBool(_kGuestModeKey, false);
       _isLoading = false;
       notifyListeners();
     } catch (e) {

@@ -71,9 +71,6 @@ class ApiService {
   }
 
   Future<void> clearToken() async {
-    try {
-      await Supabase.instance.client.auth.signOut();
-    } catch (_) {}
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_tokenKey);
   }

@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import path from 'path';
-import { initializeDatabase } from './config/database';
+import { initializeDatabase, getDatabase } from './config/database';
 import authRoutes from './routes/auth';
 import activityRoutes from './routes/activities';
 import completionRoutes from './routes/completions';
@@ -84,8 +84,13 @@ app.use('/api/chat', authMiddleware, chatRoutes);
 app.use('/api/gardens', authMiddleware, gardenRoutes);
 
 // Health check
-app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/api/health', async (req, res) => {
+  try {
+    const db = await getDatabase();
+    res.json({ status: 'ok', isPostgres: db.isPostgres, timestamp: new Date().toISOString() });
+  } catch (e: any) {
+    res.status(500).json({ error: e.message });
+  }
 });
 
 // 404 handler

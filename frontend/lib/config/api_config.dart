@@ -88,7 +88,7 @@ class ApiConfig {
       candidates.add(_resolveForPlatform(envUrl));
     }
     // Add current active LAN IP candidate
-    candidates.add('http://172.22.216.187:$defaultPort/api');
+    candidates.add('http://172.23.51.7:$defaultPort/api');
     candidates.add(defaultPlatformUrl);
 
     final uniqueCandidates = candidates.toSet().toList();

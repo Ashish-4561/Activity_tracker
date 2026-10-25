@@ -4,7 +4,6 @@ import 'package:provider/provider.dart';
 import '../../services/auth_service.dart';
 import '../../services/theme_service.dart';
 import '../../widgets/daytrack_logo.dart';
-import '../../widgets/guest_migration_dialog.dart';
 import '../../widgets/neumorphic_card.dart';
 import '../app_shell.dart';
 import 'login_screen.dart';
@@ -63,18 +62,11 @@ class _SignupScreenState extends State<SignupScreen> {
     if (_hasNavigated || !mounted) return;
     _hasNavigated = true;
     final userName = context.read<AuthService>().currentUser?.name ?? 'User';
+    Navigator.of(context).pushAndRemoveUntil(
+      MaterialPageRoute(builder: (_) => const AppShell()),
+      (_) => false,
+    );
     _showMessage('Successfully registered and logged in! Welcome, $userName.', isError: false);
-    try {
-      await GuestMigrationDialog.showIfGuestHasData(context);
-    } catch (e) {
-      debugPrint('Guest migration skipped: $e');
-    }
-    if (mounted) {
-      Navigator.of(context).pushAndRemoveUntil(
-        MaterialPageRoute(builder: (_) => const AppShell()),
-        (_) => false,
-      );
-    }
   }
 
   @override
