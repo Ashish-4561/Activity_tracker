@@ -3,7 +3,7 @@ import { getDatabase } from '../config/database';
 import { generateId, getCurrentDate } from '../utils/auth';
 import { AuthRequest } from '../middleware/auth';
 import { Activity, ActivityGroup } from '../models/types';
-import { ensureGroupExists, renameActivityGroup, deleteActivityGroup } from '../services/gardenService';
+import { ensureGroupExists, renameActivityGroup, deleteActivityGroup } from '../services/groupService';
 
 export async function createActivity(req: AuthRequest, res: Response): Promise<void> {
   try {
@@ -48,7 +48,7 @@ export async function createActivity(req: AuthRequest, res: Response): Promise<v
       [activityId, req.userId, name.trim(), group_name || 'General', icon || null, normalizedFrequency, startDate, frequencyValue, normalizedUnit, durationValue, normalizedDurationUnit, color || null, description || null, true]
     );
 
-    // Ensure group and its personal garden exist
+    // Ensure group exists
     await ensureGroupExists(req.userId, group_name || 'General');
 
     res.status(201).json({
@@ -318,7 +318,7 @@ export async function deleteGroup(req: AuthRequest, res: Response): Promise<void
       [req.userId, groupName]
     );
 
-    // Also sync deletion with activity_groups and its garden
+    // Also sync deletion with activity_groups
     const existingGroup = await db.get<ActivityGroup>(
       `SELECT * FROM activity_groups WHERE user_id = ? AND name = ?`,
       [req.userId, groupName]
@@ -359,7 +359,7 @@ export async function renameGroup(req: AuthRequest, res: Response): Promise<void
     // Ensure the group exists in activity_groups
     const group = await ensureGroupExists(req.userId, groupName);
 
-    // Rename via gardenService (updates activity_groups, activities, completions, and preserves garden)
+    // Rename via groupService (updates activity_groups, activities, completions)
     await renameActivityGroup(req.userId, group.id, trimmedNew);
 
     res.json({

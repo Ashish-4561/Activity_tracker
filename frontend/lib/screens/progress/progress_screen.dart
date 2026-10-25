@@ -356,7 +356,7 @@ class _ProgressScreenState extends State<ProgressScreen> {
     // 2. Persist to cache
     await _saveCompletionsToCache();
 
-    // 3. Sync through ActivityService (persists to backend and handles streaks & gardens)
+    // 3. Sync through ActivityService (persists to backend and handles streaks)
     if (mounted) {
       final activityService = context.read<ActivityService>();
       await activityService.toggleActivityCompletion(

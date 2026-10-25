@@ -8,7 +8,6 @@ import activityRoutes from './routes/activities';
 import completionRoutes from './routes/completions';
 import progressRoutes from './routes/progress';
 import chatRoutes from './routes/chat';
-import gardenRoutes from './routes/gardens';
 import { authMiddleware } from './middleware/auth';
 
 // Prevent transient socket resets (e.g. Supabase pooler idle timeout) from crashing process
@@ -81,7 +80,6 @@ app.use('/api/activities', authMiddleware, activityRoutes);
 app.use('/api/completions', authMiddleware, completionRoutes);
 app.use('/api/progress', authMiddleware, progressRoutes);
 app.use('/api/chat', authMiddleware, chatRoutes);
-app.use('/api/gardens', authMiddleware, gardenRoutes);
 
 // Health check
 app.get('/api/health', async (req, res) => {

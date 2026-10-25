@@ -4,7 +4,6 @@ import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'api_service.dart';
 import 'auth_service.dart';
-import 'garden_service.dart';
 
 class Activity {
   final String id;
@@ -125,11 +124,6 @@ class ActivityService extends ChangeNotifier {
   final ApiService apiService;
   final AuthService authService;
   final bool previewMode;
-  GardenService? gardenService;
-
-  void setGardenService(GardenService gs) {
-    gardenService = gs;
-  }
 
   List<Activity> _activities = [];
   DailyProgress? _dailyProgress;
@@ -954,7 +948,6 @@ class ActivityService extends ChangeNotifier {
       _updatePreviewProgress();
       _rebuildPreviewProgress();
       await _saveGuestActivitiesToStorage();
-      await gardenService?.handleGroupDeleted(groupName);
       notifyListeners();
       return;
     }
@@ -972,7 +965,6 @@ class ActivityService extends ChangeNotifier {
         _activityStreaks.remove(id);
         _activityBestStreaks.remove(id);
       }
-      await gardenService?.handleGroupDeleted(groupName);
       await fetchActivities();
     } catch (e) {
       _error = e.toString();
@@ -994,7 +986,6 @@ class ActivityService extends ChangeNotifier {
       _updatePreviewProgress();
       _rebuildGroupProgress();
       await _saveGuestActivitiesToStorage();
-      await gardenService?.handleGroupRenamed(oldGroupName, newGroupName);
       notifyListeners();
       return;
     }
@@ -1006,7 +997,6 @@ class ActivityService extends ChangeNotifier {
         oldGroupName: oldGroupName,
         newGroupName: newGroupName,
       );
-      await gardenService?.handleGroupRenamed(oldGroupName, newGroupName);
       await fetchActivities();
     } catch (e) {
       _error = e.toString();
@@ -1060,26 +1050,6 @@ class ActivityService extends ChangeNotifier {
         await _saveGuestActivitiesToStorage();
       }
 
-      // Live update personal growth garden for this specific activity group
-      final actGroup = _activities[index].groupName.trim();
-      if (actGroup.isNotEmpty) {
-        if (isGuest || previewMode) {
-          final groupCompletions = _activities
-              .where((a) =>
-                  a.groupName.trim().toLowerCase() == actGroup.toLowerCase() &&
-                  (isToday ? a.isCompleted : (_guestCompletions['${a.id}:$targetDate'] == true)))
-              .length;
-          final cStreak = _groupStreaks[actGroup] ?? 0;
-          final bStreak = _groupBestStreaks[actGroup] ?? 0;
-          gardenService?.updateGuestGardenProgress(
-            groupName: actGroup,
-            completedCount: groupCompletions,
-            currentStreak: cStreak,
-            bestStreak: bStreak,
-          );
-        }
-      }
-
       notifyListeners();
     }
 
@@ -1094,8 +1064,6 @@ class ActivityService extends ChangeNotifier {
       if (isToday) {
         await fetchDailyProgress(date: targetDate);
       }
-      // Refresh gardens from backend after verified completion
-      gardenService?.fetchGardens();
       notifyListeners();
     } catch (e) {
       // Keep local completion in user storage if backend is unreachable
